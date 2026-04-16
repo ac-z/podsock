@@ -17,6 +17,7 @@ for arg in "$@"; do
         flags="${arg:1}"
         for (( i=0; i<${#flags}; i++ )); do
             case "${flags:$i:1}" in
+                # Wayland
                 w)
                     [[ -z "${WAYLAND_DISPLAY}" ]] && { echo "Error: WAYLAND_DISPLAY not set"; exit 1; }
                     [[ -z "${XDG_RUNTIME_DIR}" ]] && { echo "Error: XDG_RUNTIME_DIR not set"; exit 1; }
@@ -26,6 +27,7 @@ for arg in "$@"; do
                       --volume=${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}:${PODSOCK_RTDIR}/${WAYLAND_DISPLAY}:ro \
                       "
                     ;;
+                # SSH Agent
                 s)
                     [[ -z "${SSH_AUTH_SOCK}" ]] && { echo "Error: SSH_AUTH_SOCK not set"; exit 1; }
                     [[ -S "${SSH_AUTH_SOCK}" ]] || { echo "Error: SSH socket not found at ${SSH_AUTH_SOCK}"; exit 1; }
@@ -34,13 +36,16 @@ for arg in "$@"; do
                       --volume=${SSH_AUTH_SOCK}:${PODSOCK_RTDIR}/ssh-agent.socket:ro \
                       "
                     ;;
+                # Graphics
                 g)
                     [[ -d /dev/dri ]] || { echo "Error: /dev/dri not found"; exit 1; }
                     COMMAND_LINE+=" --device /dev/dri"
                     ;;
+                # Network
                 n)
                     COMMAND_LINE+=" --network=host --cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE"
                     ;;
+                # Debug
                 d)
                     COMMAND_LINE+=" --cap-add=SYS_PTRACE,PERFMON --security-opt seccomp=unconfined"
                     ;;

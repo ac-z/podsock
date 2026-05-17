@@ -57,7 +57,7 @@ for arg in "$@"; do
         done
     # In the case of run or create subcommands, add the XDG_RUNTIME_DIR env var
     elif [[ "$arg" == "run" ]] || [[ "$arg" == "create" ]]; then
-        COMMAND_LINE+=" $arg --env=XDG_RUNTIME_DIR=${PODSOCK_RTDIR}"
+        COMMAND_LINE+=" $arg --userns=keep-id:uid=${PODSOCK_UID} --env=XDG_RUNTIME_DIR=${PODSOCK_RTDIR}"
     else
         COMMAND_LINE+=" $arg"
     fi

@@ -3,10 +3,13 @@
 # Podsock - Simple wrapper for podman that adds new +flags
 # that are shorthand for common operations
 
-: ${PODSOCK_UID:="1000"}
-: ${PODSOCK_RTDIR:="/run/user/${PODSOCK_UID}"}
+# Set to 0 to omit --init from created containers
+: ${PODSOCK_INIT:="1"}
 
-#command -v podman >/dev/null 2>&1 || { echo "Error: podman is required but not installed" && exit 1; }
+# Set this to your desired XDG_RUNTIME_DIR inside the container
+: ${PODSOCK_RTDIR:="/run/user/${UID}"}
+
+command -v podman >/dev/null 2>&1 || { echo "Error: podman is required but not installed" && exit 1; }
 
 COMMAND_LINE="podman "
 
@@ -49,18 +52,30 @@ for arg in "$@"; do
                 d)
                     COMMAND_LINE+=" --cap-add=SYS_PTRACE,PERFMON --security-opt seccomp=unconfined"
                     ;;
+                ?)
+                    PODSOCK_DRYRUN="1"
+                    ;;
                 *)
                     echo "Error: Unknown flag: +${flags:$i:1}"
                     exit 1
                     ;;
             esac
         done
-    # In the case of run or create subcommands, add the XDG_RUNTIME_DIR env var
     elif [[ "$arg" == "run" ]] || [[ "$arg" == "create" ]]; then
-        COMMAND_LINE+=" $arg --userns=keep-id:uid=${PODSOCK_UID} --env=XDG_RUNTIME_DIR=${PODSOCK_RTDIR}"
+        COMMAND_LINE+=" $arg --tmpfs ${PODSOCK_RTDIR}:mode=0700,U \
+                             --security-opt label=disable \
+                             --userns=keep-id \
+                             --env=XDG_RUNTIME_DIR=${PODSOCK_RTDIR}"
+        if [[ "$PODSOCK_INIT" == 1 ]]; then
+            COMMAND_LINE+=" --init"
+        fi
     else
         COMMAND_LINE+=" $arg"
     fi
 done
 
-echo "$COMMAND_LINE" | tr -s ' '
+if [[ "$PODSOCK_DRYRUN" == "1" ]]; then
+    echo "$COMMAND_LINE" | tr -s ' '
+else
+    exec $COMMAND_LINE
+fi

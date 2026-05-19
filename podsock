@@ -13,6 +13,26 @@ command -v podman >/dev/null 2>&1 || { echo "Error: podman is required but not i
 
 COMMAND_LINE="podman "
 
+run_podman() {
+    if [[ "$PODSOCK_DRYRUN" == "1" ]]; then
+        echo "$COMMAND_LINE" | tr -s ' '
+    else
+        exec $COMMAND_LINE
+    fi
+    exit
+}
+
+if [[ "$1" == "shell" ]]; then
+    REMAINING_ARGS="${@:3}"
+    COMMAND_LINE="podman exec -it $2 ${REMAINING_ARGS:-bash}"
+    run_podman
+fi
+
+if [[ "$1" == "helm" ]]; then
+    COMMAND_LINE="podman start -ai $2"
+    run_podman
+fi
+
 # Loop through args, checking for +flags
 for arg in "$@"; do
     if [[ "$arg" == +* ]]; then
@@ -20,6 +40,13 @@ for arg in "$@"; do
         flags="${arg:1}"
         for (( i=0; i<${#flags}; i++ )); do
             case "${flags:$i:1}" in
+                # Terminal intaractivity
+                t) 
+                    COMMAND_LINE+=" --interactive --tty --env=TERM=${TERM}"
+                    ;;
+                T) 
+                    COMMAND_LINE+=" --interactive --tty --env=TERM=xterm-256color"
+                    ;;
                 # Wayland
                 w)
                     [[ -z "${WAYLAND_DISPLAY}" ]] && { echo "Error: WAYLAND_DISPLAY not set"; exit 1; }
@@ -74,8 +101,4 @@ for arg in "$@"; do
     fi
 done
 
-if [[ "$PODSOCK_DRYRUN" == "1" ]]; then
-    echo "$COMMAND_LINE" | tr -s ' '
-else
-    exec $COMMAND_LINE
-fi
+run_podman

@@ -206,6 +206,9 @@ if [[ "$subcommand" == "shell" ]]; then
             die "Error: +$f flag is not supported for 'shell' command (only +? is allowed)"
         fi
     done
+    for f in "${podsock_flags[@]}"; do
+        apply_flag "$f"
+    done
     (( $# > subcommand_idx + 1 )) || die "Usage: ${0##*/} shell <container> [command]"
     cmd+=(exec -it)
     for (( i = subcommand_idx + 1; i < $#; i++ )); do
@@ -220,6 +223,9 @@ if [[ "$subcommand" == "helm" ]]; then
         if [[ "$f" != "?" ]]; then
             die "Error: +$f flag is not supported for 'helm' command (only +? is allowed)"
         fi
+    done
+    for f in "${podsock_flags[@]}"; do
+        apply_flag "$f"
     done
     (( $# > subcommand_idx + 1 )) || die "Usage: ${0##*/} helm <container>"
     cmd+=(start -ai)

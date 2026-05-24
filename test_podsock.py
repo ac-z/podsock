@@ -56,43 +56,46 @@ def _cmd_from_dryrun(stdout):
     return shlex.split(line) if line else []
 
 
+_DRYRUN_CASES = [
+    (["+?", "run", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
+    (["+?t", "run", "myimage"], ["podman", "run"] + _T + _RUN_OPTS + ["myimage"]),
+    (["+?", "shell", "mycontainer"], ["podman", "exec", "-it", "mycontainer", "bash"]),
+    (["+?", "helm", "mycontainer"], ["podman", "start", "-ai", "mycontainer"]),
+    (["+?"], ["podman"]),
+    (["+?", "ps"], ["podman", "ps"]),
+    (["+?", "exec", "mycontainer", "ls"], ["podman", "exec", "mycontainer", "ls"]),
+    (["+?", "logs", "mycontainer"], ["podman", "logs", "mycontainer"]),
+    (["+?", "+t", "run", "myimage"], ["podman", "run"] + _T + _RUN_OPTS + ["myimage"]),
+    (["run", "+?", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
+    (["+?", "create", "myimage"], ["podman", "create"] + _CREATE_OPTS + ["myimage"]),
+    (
+        ["+?", "create", "--name", "test", "+Tngd", "imagename"],
+        ["podman", "create"] + _TT + _N + ["--device", "/dev/dri"] + _D + _CREATE_OPTS + ["--name", "test", "imagename"],
+    ),
+    (
+        ["create", "--name", "test", "+Tngd?", "imagename"],
+        ["podman", "create"] + _TT + _N + ["--device", "/dev/dri"] + _D + _CREATE_OPTS + ["--name", "test", "imagename"],
+    ),
+    (["+?", "run", "myimage", "-p", "8080:80"], ["podman", "run"] + _RUN_OPTS + ["myimage", "-p", "8080:80"]),
+    (["+?", "shell", "mycontainer", "sh", "-c", "echo hi"], ["podman", "exec", "-it", "mycontainer", "sh", "-c", "echo hi"]),
+    (["+?", "helm", "mycontainer", "extra"], ["podman", "start", "-ai", "mycontainer", "extra"]),
+    (["+?", "shell", "--user", "root", "mycontainer"], ["podman", "exec", "-it", "--user", "root", "mycontainer", "bash"]),
+    (["+?", "shell", "--workdir", "/tmp", "mycontainer", "sh"], ["podman", "exec", "-it", "--workdir", "/tmp", "mycontainer", "sh"]),
+    (["+?", "helm", "--attach", "mycontainer"], ["podman", "start", "-ai", "--attach", "mycontainer"]),
+    (["+?", "run", "myimage", "--", "echo", "+hello"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "echo", "+hello"]),
+    (["+?", "run", "myimage", "--", "+extra"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "+extra"]),
+    (["+?", "shell", "-u", "root", "mycontainer"], ["podman", "exec", "-it", "-u", "root", "mycontainer", "bash"]),
+    (["+?", "shell", "-w", "/tmp", "mycontainer"], ["podman", "exec", "-it", "-w", "/tmp", "mycontainer", "bash"]),
+    (["+?", "run", "myimage", "--", "-h"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "-h"]),
+    (["+?", "run", "myimage", "--", "--help"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "--help"]),
+]
+
+
 # ---- Dry-run exact assertions ----
 @pytest.mark.parametrize(
     "args,expected",
-    [
-        (["+?", "run", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
-        (["+?t", "run", "myimage"], ["podman", "run"] + _T + _RUN_OPTS + ["myimage"]),
-        (["+?", "shell", "mycontainer"], ["podman", "exec", "-it", "mycontainer", "bash"]),
-        (["+?", "helm", "mycontainer"], ["podman", "start", "-ai", "mycontainer"]),
-        (["+?"], ["podman"]),
-        (["+?", "ps"], ["podman", "ps"]),
-        (["+?", "exec", "mycontainer", "ls"], ["podman", "exec", "mycontainer", "ls"]),
-        (["+?", "logs", "mycontainer"], ["podman", "logs", "mycontainer"]),
-        (["+?", "+t", "run", "myimage"], ["podman", "run"] + _T + _RUN_OPTS + ["myimage"]),
-        (["run", "+?", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
-        (["+?", "create", "myimage"], ["podman", "create"] + _CREATE_OPTS + ["myimage"]),
-        (
-            ["+?", "create", "--name", "test", "+Tngd", "imagename"],
-            ["podman", "create"] + _TT + _N + ["--device", "/dev/dri"] + _D + _CREATE_OPTS + ["--name", "test", "imagename"],
-        ),
-        (
-            ["create", "--name", "test", "+Tngd?", "imagename"],
-            ["podman", "create"] + _TT + _N + ["--device", "/dev/dri"] + _D + _CREATE_OPTS + ["--name", "test", "imagename"],
-        ),
-        (["+?", "run", "myimage", "-p", "8080:80"], ["podman", "run"] + _RUN_OPTS + ["myimage", "-p", "8080:80"]),
-        (["+?", "shell", "mycontainer", "sh", "-c", "echo hi"], ["podman", "exec", "-it", "mycontainer", "sh", "-c", "echo hi"]),
-        (["+?", "helm", "mycontainer", "extra"], ["podman", "start", "-ai", "mycontainer", "extra"]),
-        (["+?", "shell", "--user", "root", "mycontainer"], ["podman", "exec", "-it", "--user", "root", "mycontainer", "bash"]),
-        (["+?", "shell", "--workdir", "/tmp", "mycontainer", "sh"], ["podman", "exec", "-it", "--workdir", "/tmp", "mycontainer", "sh"]),
-        (["+?", "helm", "--attach", "mycontainer"], ["podman", "start", "-ai", "--attach", "mycontainer"]),
-        (["+?", "run", "myimage", "--", "echo", "+hello"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "echo", "+hello"]),
-        (["+?", "run", "myimage", "--", "+extra"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "+extra"]),
-        (["+?", "shell", "-u", "root", "mycontainer"], ["podman", "exec", "-it", "-u", "root", "mycontainer", "bash"]),
-        (["+?", "shell", "-w", "/tmp", "mycontainer"], ["podman", "exec", "-it", "-w", "/tmp", "mycontainer", "bash"]),
-        (["+?", "run", "myimage", "--", "-h"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "-h"]),
-        (["+?", "run", "myimage", "--", "--help"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "--help"]),
-    ],
-    ids=lambda kv: "-".join(kv[0]) if kv else "",
+    _DRYRUN_CASES,
+    ids=[" ".join(c[0]) for c in _DRYRUN_CASES],
 )
 def test_dryrun(args, expected):
     result = _run(args)
@@ -100,18 +103,21 @@ def test_dryrun(args, expected):
     assert _cmd_from_dryrun(result.stdout) == expected
 
 
+_ERROR_CASES = [
+    (["+?x", "run", "myimage"], ["not supported"]),
+    (["+t", "shell", "mycontainer"], ["not supported"]),
+    (["+tT", "run", "myimage"], ["mutually exclusive"]),
+    (["+t", "+T", "run", "myimage"], ["mutually exclusive"]),
+    (["+T", "+t", "run", "myimage"], ["mutually exclusive"]),
+    (["+?", "run", "myimage", "+extra"], ["not supported"]),
+]
+
+
 # ---- Error cases ----
 @pytest.mark.parametrize(
     "args,expected_substrings",
-    [
-        (["+?x", "run", "myimage"], ["not supported"]),
-        (["+t", "shell", "mycontainer"], ["not supported"]),
-        (["+tT", "run", "myimage"], ["mutually exclusive"]),
-        (["+t", "+T", "run", "myimage"], ["mutually exclusive"]),
-        (["+T", "+t", "run", "myimage"], ["mutually exclusive"]),
-        (["+?", "run", "myimage", "+extra"], ["not supported"]),
-    ],
-    ids=lambda kv: " ".join(kv[0]) if kv else "",
+    _ERROR_CASES,
+    ids=[" ".join(c[0]) for c in _ERROR_CASES],
 )
 def test_error(args, expected_substrings):
     result = _run(args)
@@ -121,15 +127,18 @@ def test_error(args, expected_substrings):
         assert s in combined
 
 
+_HELP_CASES = [
+    (["+?", "run", "--help"], ["Podsock", "Available +flags"]),
+    (["+?", "run", "-h", "myimage"], ["Podsock"]),
+    (["+?", "run", "--help", "myimage"], ["Podsock"]),
+]
+
+
 # ---- Help cases ----
 @pytest.mark.parametrize(
     "args,expected_substrings",
-    [
-        (["+?", "run", "--help"], ["Podsock", "Available +flags"]),
-        (["+?", "run", "-h", "myimage"], ["Podsock"]),
-        (["+?", "run", "--help", "myimage"], ["Podsock"]),
-    ],
-    ids=lambda kv: " ".join(kv[0]) if kv else "",
+    _HELP_CASES,
+    ids=[" ".join(c[0]) for c in _HELP_CASES],
 )
 def test_help(args, expected_substrings):
     result = _run(args)

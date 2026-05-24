@@ -20,7 +20,7 @@ BINDIR = $(PREFIX)/bin
 COMPLETIONDIR = $(PREFIX)/share/bash-completion/completions
 ALIAS ?=
 
-.PHONY: install uninstall completions
+.PHONY: install uninstall completions test
 
 install: podsock.py
 	@echo "Installing podsock to $(DESTDIR)$(BINDIR)"
@@ -48,3 +48,7 @@ completions: podsock.py
 		echo "Creating completion alias: $(ALIAS) -> podsock"; \
 		ln -sf podsock $(DESTDIR)$(COMPLETIONDIR)/$(ALIAS); \
 	fi
+
+test:
+	@which pytest > /dev/null 2>&1 || { echo "pytest is required to run tests. Install it (e.g. apt install python3-pytest) and try again."; exit 1; }
+	@pytest test_podsock.py -v

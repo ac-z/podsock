@@ -11,6 +11,19 @@ import sys
 PODSOCK_INIT = os.environ.get("PODSOCK_INIT", "1")
 PODSOCK_RTDIR = os.environ.get("PODSOCK_RTDIR", f"/run/user/{os.getuid()}")
 
+_BOOL_LONG_OPTS = frozenset(["--help", "--version", "--syslog"])
+_FLAG_DESCS = {
+    "t": "Terminal interactivity (uses $TERM)",
+    "T": "Terminal interactivity (forces xterm-256color)",
+    "w": "Wayland display forwarding",
+    "s": "SSH agent socket forwarding",
+    "g": "GPU/graphics device access",
+    "n": "Host network with extra capabilities",
+    "d": "Debug capabilities (ptrace, perfmon)",
+    "?": "Dry run (print command without executing)",
+}
+_ALLOWED_FLAGS = {"run": "tTwsgnd?", "create": "tTwsgnd?"}
+
 
 def die(msg):
     """Print message to stderr and exit with code 1."""
@@ -25,8 +38,8 @@ def show_help(subcommand=None):
     print("Usage: podsock [+flags] <command> [args...]")
     print()
 
-    if subcommand in ("run", "create"):
-        flags = ["t", "T", "w", "s", "g", "n", "d", "?"]
+    if subcommand in _ALLOWED_FLAGS:
+        flags = list(_ALLOWED_FLAGS[subcommand])
     elif subcommand in ("shell", "helm"):
         flags = ["?"]
     elif subcommand == "help":
@@ -38,25 +51,11 @@ def show_help(subcommand=None):
 
     if subcommand:
         print(f"Available +flags for '{subcommand}':")
-        descs = {
-            "t": "Terminal interactivity (uses $TERM)",
-            "T": "Terminal interactivity (forces xterm-256color)",
-            "w": "Wayland display forwarding",
-            "s": "SSH agent socket forwarding",
-            "g": "GPU/graphics device access",
-            "n": "Host network with extra capabilities",
-            "d": "Debug capabilities (ptrace, perfmon)",
-            "?": "Dry run (print command without executing)",
-        }
         for f in flags:
-            print(f"  +{f}  {descs[f]}")
+            print(f"  +{f}  {_FLAG_DESCS[f]}")
         print()
 
-    podman_cmd = subcommand
-    if subcommand == "shell":
-        podman_cmd = "exec"
-    elif subcommand == "helm":
-        podman_cmd = "start"
+    podman_cmd = {"shell": "exec", "helm": "start"}.get(subcommand, subcommand)
 
     if subcommand:
         print(f"--- Podman help for '{podman_cmd}' ---")
@@ -72,18 +71,18 @@ def show_help(subcommand=None):
         subprocess.run(["podman", "--help"], check=False)
 
 
-def _expand_flag(char, cmd):
+def _expand_flag(char):
     """Expand a single podsock flag char into podman args."""
+    # Terminal flags
     if char == "t":
-        cmd.extend([
+        return [
             "--interactive", "--tty",
             f"--env=TERM={os.environ.get('TERM', 'xterm')}",
-        ])
+        ]
     elif char == "T":
-        cmd.extend([
-            "--interactive", "--tty",
-            "--env=TERM=xterm-256color",
-        ])
+        return ["--interactive", "--tty", "--env=TERM=xterm-256color"]
+
+    # Display
     elif char == "w":
         wl = os.environ.get("WAYLAND_DISPLAY")
         if not wl:
@@ -94,37 +93,46 @@ def _expand_flag(char, cmd):
         sock = os.path.join(xdg, wl)
         if not os.path.exists(sock) or not stat.S_ISSOCK(os.stat(sock).st_mode):
             die(f"Error: Wayland socket not found at {sock}")
-        cmd.append(f"--env=WAYLAND_DISPLAY={wl}")
-        cmd.append(f"--volume={sock}:{PODSOCK_RTDIR}/{wl}:ro")
+        return [
+            f"--env=WAYLAND_DISPLAY={wl}",
+            f"--volume={sock}:{PODSOCK_RTDIR}/{wl}:ro",
+        ]
+
+    # SSH forwarding
     elif char == "s":
         ssh = os.environ.get("SSH_AUTH_SOCK")
         if not ssh:
             die("Error: SSH_AUTH_SOCK not set")
         if not os.path.exists(ssh) or not stat.S_ISSOCK(os.stat(ssh).st_mode):
             die(f"Error: SSH socket not found at {ssh}")
-        cmd.append(f"--env=SSH_AUTH_SOCK={PODSOCK_RTDIR}/ssh-agent.socket")
-        cmd.append(f"--volume={ssh}:{PODSOCK_RTDIR}/ssh-agent.socket:ro")
+        return [
+            f"--env=SSH_AUTH_SOCK={PODSOCK_RTDIR}/ssh-agent.socket",
+            f"--volume={ssh}:{PODSOCK_RTDIR}/ssh-agent.socket:ro",
+        ]
+
+    # Hardware / capabilities
     elif char == "g":
         if not os.path.isdir("/dev/dri"):
             die("Error: /dev/dri not found")
-        cmd.extend(["--device", "/dev/dri"])
+        return ["--device", "/dev/dri"]
+
     elif char == "n":
-        cmd.extend([
+        return [
             "--network=host",
             "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE",
-        ])
+        ]
     elif char == "d":
-        cmd.extend([
+        return [
             "--cap-add=SYS_PTRACE,PERFMON",
             "--security-opt", "seccomp=unconfined",
-        ])
+        ]
+
+    return []
 
 
 def _find_first_positional(args, start=0, extra_bool_opts=None):
     """Return index of first positional arg starting at start, or -1 if none."""
-    _BOOL_LONG_OPTS = frozenset(["--help", "--version", "--syslog"])
-    if extra_bool_opts:
-        _BOOL_LONG_OPTS = _BOOL_LONG_OPTS | extra_bool_opts
+    bool_opts = _BOOL_LONG_OPTS | extra_bool_opts if extra_bool_opts else _BOOL_LONG_OPTS
     skip_next = False
     for i in range(start, len(args)):
         if skip_next:
@@ -138,7 +146,7 @@ def _find_first_positional(args, start=0, extra_bool_opts=None):
         if arg.startswith("+"):
             continue
         if arg.startswith("-"):
-            if arg.startswith("--") and "=" not in arg and arg not in _BOOL_LONG_OPTS:
+            if arg.startswith("--") and "=" not in arg and arg not in bool_opts:
                 skip_next = True
             continue
         return i
@@ -147,9 +155,6 @@ def _find_first_positional(args, start=0, extra_bool_opts=None):
 
 def _find_subcommand(args):
     """Return (subcommand, subcommand_idx) before --, skipping +flags and -options."""
-    # Long-form boolean options that do NOT consume a following value.
-    _BOOL_LONG_OPTS = frozenset(["--help", "--version", "--syslog"])
-
     skip_next = False
     for i, arg in enumerate(args):
         if arg == "--":
@@ -175,8 +180,9 @@ def main():
     if not args:
         os.execvp("podman", ["podman"])
 
-    # ---- Pass 1: find subcommand, collect all +flags, find -- ----
+    # ---- Pass 1: parse arguments ----
     subcommand, subcommand_idx = _find_subcommand(args)
+
     flags = []
     double_dash_idx = -1
     for i, arg in enumerate(args):
@@ -186,7 +192,7 @@ def main():
         if arg.startswith("+"):
             flags.append(arg)
 
-    # Help detection
+    # ---- Help handling ----
     if any(a in ("-h", "--help") for a in args):
         show_help(subcommand)
         sys.exit(0)
@@ -200,14 +206,9 @@ def main():
         show_help(target)
         sys.exit(0)
 
-    # Determine allowed flags per subcommand
-    if subcommand in ("run", "create"):
-        allowed = set("tTwsgnd?")
-    else:
-        # shell, helm, and every other podman subcommand only support +?
-        allowed = set("?")
+    # ---- Validate +flags ----
+    allowed = set(_ALLOWED_FLAGS.get(subcommand, "?"))
 
-    # Validate ALL +flags (wherever they appeared)
     dryrun = False
     for group in flags:
         for char in group[1:]:
@@ -222,21 +223,18 @@ def main():
     for group in flags:
         for char in group[1:]:
             if char != "?":
-                _expand_flag(char, flag_args)
+                flag_args.extend(_expand_flag(char))
 
     # Everything except +flags (before --)
-    remaining = []
-    for i, arg in enumerate(args):
-        if double_dash_idx >= 0 and i >= double_dash_idx:
-            remaining.append(arg)
-        elif not arg.startswith("+"):
-            remaining.append(arg)
+    remaining = [
+        arg for i, arg in enumerate(args)
+        if (double_dash_idx >= 0 and i >= double_dash_idx) or not arg.startswith("+")
+    ]
 
+    # ---- Subcommand dispatch ----
     if subcommand == "shell":
         # Prepend global podman options (shell rewrites the subcommand)
-        for i in range(subcommand_idx):
-            if not args[i].startswith("+"):
-                cmd.append(args[i])
+        cmd.extend(a for a in args[:subcommand_idx] if not a.startswith("+"))
         shell_idx = remaining.index("shell")
         rem_after_shell = remaining[shell_idx + 1:]
         container_idx = _find_first_positional(
@@ -254,9 +252,7 @@ def main():
             cmd.append("bash")
     elif subcommand == "helm":
         # Prepend global podman options (helm rewrites the subcommand)
-        for i in range(subcommand_idx):
-            if not args[i].startswith("+"):
-                cmd.append(args[i])
+        cmd.extend(a for a in args[:subcommand_idx] if not a.startswith("+"))
         helm_idx = remaining.index("helm")
         rem_after_helm = remaining[helm_idx + 1:]
         container_idx = _find_first_positional(
@@ -295,6 +291,7 @@ def main():
         cmd.extend(flag_args)
         cmd.extend(remaining)
 
+    # ---- Execute or dry-run ----
     if dryrun or os.environ.get("PODSOCK_DRYRUN") == "1":
         print(" ".join(shlex.quote(a) for a in cmd))
     else:

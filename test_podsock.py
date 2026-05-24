@@ -96,6 +96,33 @@ tests = [
     # +extra after image is a flag; use -- for literal +args
     (["+?", "run", "myimage", "+extra"], "error", ["not supported"]),
     (["+?", "run", "myimage", "--", "+extra"], "success", ["--", "+extra"]),
+
+    # ---- Short option values should not break shell default bash ----
+    (
+        ["+?", "shell", "-u", "root", "mycontainer"],
+        "success",
+        ["podman", "exec", "-it", "-u", "root", "mycontainer", "bash"],
+    ),
+    (
+        ["+?", "shell", "-w", "/tmp", "mycontainer"],
+        "success",
+        ["podman", "exec", "-it", "-w", "/tmp", "mycontainer", "bash"],
+    ),
+
+    # ---- Help should not trigger after -- or first positional ----
+    (
+        ["+?", "run", "myimage", "--", "-h"],
+        "success",
+        ["--", "-h"],
+    ),
+    (
+        ["+?", "run", "myimage", "--", "--help"],
+        "success",
+        ["--", "--help"],
+    ),
+    # Help should still trigger before positional
+    (["+?", "run", "-h", "myimage"], "help", ["Podsock"]),
+    (["+?", "run", "--help", "myimage"], "help", ["Podsock"]),
 ]
 
 env = {

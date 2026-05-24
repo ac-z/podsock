@@ -181,7 +181,9 @@ def print_bash_completion():
 
     # Inject podsock-specific subcommands when at the subcommand position
     if [[ -z "$subcmd" && "$cur" != -* ]]; then
-        COMPREPLY+=($(compgen -W "shell helm" -- "$cur"))
+        while IFS= read -r line; do
+            COMPREPLY+=("$line")
+        done < <(compgen -W "shell helm" -- "$cur")
     fi
 
     # Apply Cobra directives
@@ -263,9 +265,10 @@ def _expand_flag(char):
     return []
 
 
-def _find_first_positional(args, start=0, extra_bool_opts=None):
+def _find_first_positional(args, start=0, extra_bool_opts=None, short_value_opts=None):
     """Return index of first positional arg starting at start, or -1 if none."""
     bool_opts = _BOOL_LONG_OPTS | extra_bool_opts if extra_bool_opts else _BOOL_LONG_OPTS
+    short_vals = short_value_opts or set()
     skip_next = False
     for i in range(start, len(args)):
         if skip_next:
@@ -279,7 +282,10 @@ def _find_first_positional(args, start=0, extra_bool_opts=None):
         if arg.startswith("+"):
             continue
         if arg.startswith("-"):
-            if arg.startswith("--") and "=" not in arg and arg not in bool_opts:
+            if arg.startswith("--"):
+                if "=" not in arg and arg not in bool_opts:
+                    skip_next = True
+            elif len(arg) == 2 and arg[1] in short_vals:
                 skip_next = True
             continue
         return i
@@ -330,7 +336,32 @@ def main():
             flags.append(arg)
 
     # ---- Help handling ----
-    if any(a in ("-h", "--help") for a in args):
+    # Scan args before -- and before the first positional after the subcommand.
+    # Skip the subcommand itself and values of long/short options.
+    help_found = False
+    skip_next = False
+    for i, arg in enumerate(args):
+        if arg == "--":
+            break
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("+"):
+            continue
+        if arg.startswith("-"):
+            if arg.startswith("--"):
+                if "=" not in arg and arg not in _BOOL_LONG_OPTS:
+                    skip_next = True
+            elif len(arg) == 2 and arg[1] not in "itldas":
+                skip_next = True
+            if arg in ("-h", "--help"):
+                help_found = True
+                break
+            continue
+        if subcommand is not None and i == subcommand_idx:
+            continue
+        break
+    if help_found:
         show_help(subcommand)
         sys.exit(0)
 
@@ -380,6 +411,7 @@ def main():
                 "--interactive", "--tty", "--privileged", "--latest",
                 "--detach", "--env-host", "--init"
             ]),
+            frozenset("euw"),
         )
         if container_idx == -1:
             die(f"Usage: {sys.argv[0]} shell <container> [command]")

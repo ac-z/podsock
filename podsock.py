@@ -122,12 +122,16 @@ def print_bash_completion():
         local remaining=""
         for ((i=0; i<${#avail}; i++)); do
             local c="${avail:$i:1}"
-            [[ "$used" != *"$c"* ]] && remaining="${remaining}${c}"
+            [[ "$used" == *"$c"* ]] && continue
+            # +t and +T are mutually exclusive (different terminal modes)
+            [[ "$c" == "t" && "$used" == *T* ]] && continue
+            [[ "$c" == "T" && "$used" == *t* ]] && continue
+            remaining="${remaining}${c}"
         done
 
         COMPREPLY=()
         for ((i=0; i<${#remaining}; i++)); do
-            COMPREPLY+=("+${remaining:$i:1}")
+            COMPREPLY+=("${cur}${remaining:$i:1}")
         done
         return 0
     fi
@@ -397,12 +401,16 @@ def main():
     allowed = set(_ALLOWED_FLAGS.get(subcommand, "?"))
 
     dryrun = False
+    seen = set()
     for group in flags:
         for char in group[1:]:
             if char not in allowed:
                 die(f"Error: +{char} flag is not supported for this command")
             if char == "?":
                 dryrun = True
+            seen.add(char)
+    if "t" in seen and "T" in seen:
+        die("Error: +t and +T are mutually exclusive")
 
     # ---- Pass 2: build command ----
     cmd = ["podman"]

@@ -36,6 +36,11 @@ tests = [
     (["+?x", "run", "myimage"], "error", ["not supported"]),
     (["+t", "shell", "mycontainer"], "error", ["not supported"]),
 
+    # ---- +t and +T are mutually exclusive ----
+    (["+tT", "run", "myimage"], "error", ["mutually exclusive"]),
+    (["+t", "+T", "run", "myimage"], "error", ["mutually exclusive"]),
+    (["+T", "+t", "run", "myimage"], "error", ["mutually exclusive"]),
+
     # ---- Passthrough / other subcommands ----
     (["+?", "ps"], "success", ["podman", "ps"]),
     (["+?", "exec", "mycontainer", "ls"], "success", ["podman", "exec", "mycontainer", "ls"]),
@@ -267,17 +272,33 @@ out=$(test_flags podsock "+")
 [[ "$out" == *"+?"* ]] || { echo "FAIL: nosub +flag missing +? got: $out"; exit 1; }
 [[ "$out" != *"+t"* ]] || { echo "FAIL: nosub +flag has +t got: $out"; exit 1; }
 
-# chained +flags (already typed 't', don't resuggest it)
+# chained +flags (already typed 't', don't resuggest it; preserve prefix)
 out=$(test_flags podsock run "+t")
-[[ "$out" != *"+t"* ]] || { echo "FAIL: +t resuggested got: $out"; exit 1; }
-[[ "$out" == *"+T"* ]] || { echo "FAIL: chained +T missing got: $out"; exit 1; }
-[[ "$out" == *"+w"* ]] || { echo "FAIL: chained +w missing got: $out"; exit 1; }
+[[ "$out" != *"+tt"* ]] || { echo "FAIL: +t resuggested got: $out"; exit 1; }
+[[ "$out" == *"+tw"* ]] || { echo "FAIL: chained +tw missing got: $out"; exit 1; }
+[[ "$out" == *"+ts"* ]] || { echo "FAIL: chained +ts missing got: $out"; exit 1; }
 
-# chained +flags (already typed 'Td', don't resuggest them)
+# chained +flags (already typed 'Td', don't resuggest them; preserve prefix)
 out=$(test_flags podsock run "+Td")
-[[ "$out" != *"+T"* ]] || { echo "FAIL: +T resuggested got: $out"; exit 1; }
-[[ "$out" != *"+d"* ]] || { echo "FAIL: +d resuggested got: $out"; exit 1; }
-[[ "$out" == *"+w"* ]] || { echo "FAIL: chained +w missing got: $out"; exit 1; }
+[[ "$out" != *"+TdT"* ]] || { echo "FAIL: +T resuggested got: $out"; exit 1; }
+[[ "$out" != *"+Tdd"* ]] || { echo "FAIL: +d resuggested got: $out"; exit 1; }
+[[ "$out" == *"+Tdw"* ]] || { echo "FAIL: chained +Tdw missing got: $out"; exit 1; }
+
+# chained +flags preserve already-typed chars (don't reset to bare +)
+out=$(test_flags podsock run "+Twd")
+[[ "$out" == *"+Twds"* ]] || { echo "FAIL: chained +Twds missing got: $out"; exit 1; }
+[[ "$out" == *"+Twdg"* ]] || { echo "FAIL: chained +Twdg missing got: $out"; exit 1; }
+for w in $out; do
+    [[ "$w" == "+Twd"* ]] || { echo "FAIL: completion '$w' lost +Twd prefix in: $out"; exit 1; }
+done
+
+# +t and +T are mutually exclusive in completion
+out=$(test_flags podsock run "+t")
+[[ "$out" != *"+tT"* ]] || { echo "FAIL: +T suggested after +t got: $out"; exit 1; }
+out=$(test_flags podsock run "+T")
+[[ "$out" != *"+Tt"* ]] || { echo "FAIL: +t suggested after +T got: $out"; exit 1; }
+out=$(test_flags podsock "+t" run "+")
+[[ "$out" != *"+T"* ]] || { echo "FAIL: +T suggested in fresh word after +t got: $out"; exit 1; }
 
 # multi-word +flags deduplicate across words
 out=$(test_flags podsock "+T" "+d" run "+")

@@ -120,6 +120,31 @@ def _expand_flag(char, cmd):
         ])
 
 
+def _find_first_positional(args, start=0, extra_bool_opts=None):
+    """Return index of first positional arg starting at start, or -1 if none."""
+    _BOOL_LONG_OPTS = frozenset(["--help", "--version", "--syslog"])
+    if extra_bool_opts:
+        _BOOL_LONG_OPTS = _BOOL_LONG_OPTS | extra_bool_opts
+    skip_next = False
+    for i in range(start, len(args)):
+        if skip_next:
+            skip_next = False
+            continue
+        arg = args[i]
+        if arg == "--":
+            if i + 1 < len(args):
+                return i + 1
+            return -1
+        if arg.startswith("+"):
+            continue
+        if arg.startswith("-"):
+            if arg.startswith("--") and "=" not in arg and arg not in _BOOL_LONG_OPTS:
+                skip_next = True
+            continue
+        return i
+    return -1
+
+
 def _find_subcommand(args):
     """Return (subcommand, subcommand_idx) before --, skipping +flags and -options."""
     # Long-form boolean options that do NOT consume a following value.
@@ -212,36 +237,38 @@ def main():
         for i in range(subcommand_idx):
             if not args[i].startswith("+"):
                 cmd.append(args[i])
-        if subcommand_idx + 1 >= len(args):
+        shell_idx = remaining.index("shell")
+        rem_after_shell = remaining[shell_idx + 1:]
+        container_idx = _find_first_positional(
+            args, subcommand_idx + 1,
+            frozenset(["--interactive", "--tty", "--privileged", "--latest", "--detach", "--env-host", "--init"]),
+        )
+        if container_idx == -1:
             die(f"Usage: {sys.argv[0]} shell <container> [command]")
         cmd.append("exec")
         cmd.extend(flag_args)
-        cmd.extend(["-it", args[subcommand_idx + 1]])
-        tail = [a for a in args[subcommand_idx + 2:] if not a.startswith("+")]
-        if double_dash_idx >= 0:
-            before_dd = [a for a in args[subcommand_idx + 2:double_dash_idx] if not a.startswith("+")]
-            after_dd = args[double_dash_idx:]
-            tail = before_dd + after_dd
-        if tail:
-            cmd.extend(tail)
-        else:
+        cmd.append("-it")
+        cmd.extend(rem_after_shell)
+        has_tail = any(not a.startswith("+") for a in args[container_idx + 1:])
+        if not has_tail:
             cmd.append("bash")
     elif subcommand == "helm":
         # Prepend global podman options (helm rewrites the subcommand)
         for i in range(subcommand_idx):
             if not args[i].startswith("+"):
                 cmd.append(args[i])
-        if subcommand_idx + 1 >= len(args):
+        helm_idx = remaining.index("helm")
+        rem_after_helm = remaining[helm_idx + 1:]
+        container_idx = _find_first_positional(
+            args, subcommand_idx + 1,
+            frozenset(["--attach", "--interactive", "--latest", "--all", "--sig-proxy"]),
+        )
+        if container_idx == -1:
             die(f"Usage: {sys.argv[0]} helm <container>")
         cmd.append("start")
         cmd.extend(flag_args)
-        cmd.extend(["-ai", args[subcommand_idx + 1]])
-        tail = [a for a in args[subcommand_idx + 2:] if not a.startswith("+")]
-        if double_dash_idx >= 0:
-            before_dd = [a for a in args[subcommand_idx + 2:double_dash_idx] if not a.startswith("+")]
-            after_dd = args[double_dash_idx:]
-            tail = before_dd + after_dd
-        cmd.extend(tail)
+        cmd.append("-ai")
+        cmd.extend(rem_after_helm)
     elif subcommand in ("run", "create"):
         cmd.append(subcommand)
         cmd.extend(flag_args)

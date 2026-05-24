@@ -22,6 +22,9 @@ tests = [
     (["+?", "logs", "mycontainer"], "success", ["podman", "logs", "mycontainer"]),
     (["+?", "shell", "mycontainer", "sh", "-c", "echo hi"], "success", ["podman", "exec", "-it", "mycontainer", "sh", "-c", "echo hi"]),
     (["+?", "helm", "mycontainer", "extra"], "success", ["podman", "start", "-ai", "mycontainer"]),
+    (["+?", "shell", "--user", "root", "mycontainer"], "success", ["podman", "exec", "-it", "--user", "root", "mycontainer", "bash"]),
+    (["+?", "shell", "--workdir", "/tmp", "mycontainer", "sh"], "success", ["podman", "exec", "-it", "--workdir", "/tmp", "mycontainer", "sh"]),
+    (["+?", "helm", "--attach", "mycontainer"], "success", ["podman", "start", "-ai", "--attach", "mycontainer"]),
     # +extra after image is a flag; use -- for literal +args
     (["+?", "run", "myimage", "+extra"], "error", ["not supported"]),
     (["+?", "run", "myimage", "--", "+extra"], "success", ["--", "+extra"]),

@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+
+"""
+Test suite for podsock.py
+"""
+
 import subprocess
 import sys
 import os
@@ -25,8 +30,36 @@ tests = [
     (["run", "+?", "myimage"], "success", ["podman", "run", "--tmpfs", "myimage"]),
     (["+?", "create", "myimage"], "success", ["podman", "create", "myimage"]),
     # Flags after subcommand expand (using +Tngd to avoid w/s socket checks)
-    (["+?", "create", "--name", "test", "+Tngd", "imagename"], "success", ["create", "--interactive", "--tty", "--network=host", "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE", "--cap-add=SYS_PTRACE,PERFMON", "--name", "test", "imagename"]),
-    (["create", "--name", "test", "+Tngd?", "imagename"], "success", ["create", "--interactive", "--tty", "--network=host", "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE", "--cap-add=SYS_PTRACE,PERFMON", "--name", "test", "imagename"]),
+    (
+        ["+?", "create", "--name", "test", "+Tngd", "imagename"],
+        "success",
+        [
+            "create",
+            "--interactive",
+            "--tty",
+            "--network=host",
+            "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE",
+            "--cap-add=SYS_PTRACE,PERFMON",
+            "--name",
+            "test",
+            "imagename",
+        ],
+    ),
+    (
+        ["create", "--name", "test", "+Tngd?", "imagename"],
+        "success",
+        [
+            "create",
+            "--interactive",
+            "--tty",
+            "--network=host",
+            "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE",
+            "--cap-add=SYS_PTRACE,PERFMON",
+            "--name",
+            "test",
+            "imagename",
+        ],
+    ),
 
     # ---- Bash completion ----
     (["--bash-completion"], "success", ["_podsock", "complete -o default -F _podsock podsock"]),
@@ -36,11 +69,27 @@ tests = [
 
     # ---- Options and positional args ----
     (["+?", "run", "myimage", "-p", "8080:80"], "success", ["-p", "8080:80"]),
-    (["+?", "shell", "mycontainer", "sh", "-c", "echo hi"], "success", ["podman", "exec", "-it", "mycontainer", "sh", "-c", "echo hi"]),
+    (
+        ["+?", "shell", "mycontainer", "sh", "-c", "echo hi"],
+        "success",
+        ["podman", "exec", "-it", "mycontainer", "sh", "-c", "echo hi"],
+    ),
     (["+?", "helm", "mycontainer", "extra"], "success", ["podman", "start", "-ai", "mycontainer"]),
-    (["+?", "shell", "--user", "root", "mycontainer"], "success", ["podman", "exec", "-it", "--user", "root", "mycontainer", "bash"]),
-    (["+?", "shell", "--workdir", "/tmp", "mycontainer", "sh"], "success", ["podman", "exec", "-it", "--workdir", "/tmp", "mycontainer", "sh"]),
-    (["+?", "helm", "--attach", "mycontainer"], "success", ["podman", "start", "-ai", "--attach", "mycontainer"]),
+    (
+        ["+?", "shell", "--user", "root", "mycontainer"],
+        "success",
+        ["podman", "exec", "-it", "--user", "root", "mycontainer", "bash"],
+    ),
+    (
+        ["+?", "shell", "--workdir", "/tmp", "mycontainer", "sh"],
+        "success",
+        ["podman", "exec", "-it", "--workdir", "/tmp", "mycontainer", "sh"],
+    ),
+    (
+        ["+?", "helm", "--attach", "mycontainer"],
+        "success",
+        ["podman", "start", "-ai", "--attach", "mycontainer"],
+    ),
 
     # ---- Double-dash literal passthrough ----
     (["+?", "run", "myimage", "--", "echo", "+hello"], "success", ["--", "echo", "+hello"]),
@@ -49,7 +98,10 @@ tests = [
     (["+?", "run", "myimage", "--", "+extra"], "success", ["--", "+extra"]),
 ]
 
-env = {"PATH": "/tmp/fakebin:" + subprocess.check_output(["bash", "-c", "echo $PATH"]).decode().strip()}
+env = {
+    "PATH": "/tmp/fakebin:"
+    + subprocess.check_output(["bash", "-c", "echo $PATH"]).decode().strip()
+}
 
 passed = 0
 failed = 0
@@ -103,11 +155,11 @@ for args, behavior, expected in tests:
             print(f"PASS [{args}]")
 
 # ---- Bash completion functional tests ----
-completion_script = subprocess.check_output(
+COMPLETION_SCRIPT = subprocess.check_output(
     [sys.executable, os.path.join(os.path.dirname(__file__), "podsock.py"), "--bash-completion"]
 ).decode()
 
-bash_test = '''
+BASH_TEST = '''
 set -e
 
 # compopt doesn't work outside a real completion function
@@ -145,7 +197,7 @@ podman() {
     fi
 }
 
-''' + completion_script + '''
+''' + COMPLETION_SCRIPT + '''
 test_flags() {
     COMP_WORDS=("$@")
     COMP_CWORD=$(($# - 1))
@@ -217,12 +269,18 @@ out=$(test_flags podsock "+t" run "")
 echo "BASH_PASS"
 '''
 
-result = subprocess.run(["bash", "-c", bash_test], capture_output=True, text=True, check=False)
+result = subprocess.run(["bash", "-c", BASH_TEST], capture_output=True, text=True, check=False)
 if result.returncode == 0 and result.stdout.strip() == "BASH_PASS":
     passed += 1
     print("PASS [bash completion]")
 else:
     failed += 1
-    print(f"FAIL [bash completion]: rc={result.returncode} out={result.stdout.strip()!r} err={result.stderr.strip()!r}")
+    print(
+        (
+            f"FAIL [bash completion]: rc={result.returncode} "
+            f"out={result.stdout.strip()!r} "
+            f"err={result.stderr.strip()!r}"
+        )
+    )
 
 print(f"\n{passed} passed, {failed} failed")

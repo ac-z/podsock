@@ -365,7 +365,10 @@ def main():
         rem_after_shell = remaining[shell_idx + 1:]
         container_idx = _find_first_positional(
             args, subcommand_idx + 1,
-            frozenset(["--interactive", "--tty", "--privileged", "--latest", "--detach", "--env-host", "--init"]),
+            frozenset([
+                "--interactive", "--tty", "--privileged", "--latest",
+                "--detach", "--env-host", "--init"
+            ]),
         )
         if container_idx == -1:
             die(f"Usage: {sys.argv[0]} shell <container> [command]")

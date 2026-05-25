@@ -108,7 +108,7 @@ def print_bash_completion():
 
         COMPREPLY=()
         for ((i=0; i<${#remaining}; i++)); do
-            COMPREPLY+=("$cur${remaining:$i:1}")
+            COMPREPLY+=("+${remaining:$i:1}")
         done
         return 0
     fi

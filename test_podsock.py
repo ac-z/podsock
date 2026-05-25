@@ -224,14 +224,30 @@ out=$(test_flags podsock "+")
 [[ "$out" == *"+?"* ]] || { echo "FAIL: nosub +flag missing +? got: $out"; exit 1; }
 [[ "$out" != *"+t"* ]] || { echo "FAIL: nosub +flag has +t got: $out"; exit 1; }
 
-# exact match
+# chained +flags (already typed 't', don't resuggest it)
 out=$(test_flags podsock run "+t")
-[[ "$out" == "+t" ]] || { echo "FAIL: exact +t got: $out"; exit 1; }
+[[ "$out" != *"+t"* ]] || { echo "FAIL: +t resuggested got: $out"; exit 1; }
+[[ "$out" == *"+T"* ]] || { echo "FAIL: chained +T missing got: $out"; exit 1; }
+[[ "$out" == *"+w"* ]] || { echo "FAIL: chained +w missing got: $out"; exit 1; }
+
+# chained +flags (already typed 'Td', don't resuggest them)
+out=$(test_flags podsock run "+Td")
+[[ "$out" != *"+T"* ]] || { echo "FAIL: +T resuggested got: $out"; exit 1; }
+[[ "$out" != *"+d"* ]] || { echo "FAIL: +d resuggested got: $out"; exit 1; }
+[[ "$out" == *"+w"* ]] || { echo "FAIL: chained +w missing got: $out"; exit 1; }
+
+# multi-word +flags deduplicate across words
+out=$(test_flags podsock "+T" "+d" run "+")
+[[ "$out" != *"+T"* ]] || { echo "FAIL: multi-word +T resuggested got: $out"; exit 1; }
+[[ "$out" != *"+d"* ]] || { echo "FAIL: multi-word +d resuggested got: $out"; exit 1; }
+[[ "$out" == *"+w"* ]] || { echo "FAIL: multi-word +w missing got: $out"; exit 1; }
 
 # podman __complete '' (empty args → subcommands)
 out=$(test_flags podsock "")
 [[ "$out" == *"run"* ]] || { echo "FAIL: subcommands missing 'run' got: $out"; exit 1; }
 [[ "$out" == *"exec"* ]] || { echo "FAIL: subcommands missing 'exec' got: $out"; exit 1; }
+[[ "$out" == *"shell"* ]] || { echo "FAIL: subcommands missing 'shell' got: $out"; exit 1; }
+[[ "$out" == *"helm"* ]] || { echo "FAIL: subcommands missing 'helm' got: $out"; exit 1; }
 
 # podman __complete run '' (run options)
 out=$(test_flags podsock run "")

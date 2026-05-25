@@ -71,6 +71,70 @@ def show_help(subcommand=None):
         subprocess.run(["podman", "--help"], check=False)
 
 
+def print_bash_completion():
+    """Print a bash completion script for podsock."""
+    print(r"""_podsock() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local i subcmd=""
+
+    # Detect subcommand to determine valid +flags
+    for ((i=1; i<COMP_CWORD; i++)); do
+        case "${COMP_WORDS[i]}" in
+            run|create) subcmd="${COMP_WORDS[i]}"; break ;;
+            shell|helm) subcmd="${COMP_WORDS[i]}"; break ;;
+        esac
+    done
+
+    # Complete +flags
+    if [[ "$cur" == +* ]]; then
+        local flags=""
+        case "$subcmd" in
+            run|create) flags="+t +T +w +s +g +n +d +?" ;;
+            shell|helm) flags="+?" ;;
+            *) flags="+?" ;;
+        esac
+        COMPREPLY=($(compgen -W "$flags" -- "$cur"))
+        return 0
+    fi
+
+    # Delegate to podman completion after stripping +flags and mapping subcommands
+    local podman_words=("podman")
+    local podman_cword=0
+    local found=0
+
+    for ((i=1; i<=${#COMP_WORDS[@]}-1; i++)); do
+        local w="${COMP_WORDS[i]}"
+        [[ "$w" == +* ]] && continue
+        podman_words+=("$w")
+        if [[ $i -lt $COMP_CWORD ]]; then
+            ((podman_cword++))
+        elif [[ $i -eq $COMP_CWORD ]]; then
+            podman_cword=$((${#podman_words[@]} - 1))
+        fi
+        if [[ $found -eq 0 ]]; then
+            case "$w" in
+                shell) podman_words[-1]="exec"; found=1 ;;
+                helm)  podman_words[-1]="start"; found=1 ;;
+                run|create|exec|ps|logs|images|build|push|pull|import|export|stats|top|pause|unpause|stop|start|restart|kill|rm|wait|mount|umount|attach|diff|inspect|history|info|version|generate|play|kube|manifest|network|volume|pod|system) found=1 ;;
+            esac
+        fi
+    done
+
+    if type -t _podman &>/dev/null; then
+        local old_words=("${COMP_WORDS[@]}")
+        local old_cword=$COMP_CWORD
+        COMP_WORDS=("${podman_words[@]}")
+        COMP_CWORD=$podman_cword
+        _podman
+        COMP_WORDS=("${old_words[@]}")
+        COMP_CWORD=$old_cword
+    fi
+}
+
+complete -F _podsock podsock
+""")
+
+
 def _expand_flag(char):
     """Expand a single podsock flag char into podman args."""
     # Terminal flags
@@ -179,6 +243,10 @@ def main():
 
     if not args:
         os.execvp("podman", ["podman"])
+
+    if len(args) == 1 and args[0] == "--bash-completion":
+        print_bash_completion()
+        sys.exit(0)
 
     # ---- Pass 1: parse arguments ----
     subcommand, subcommand_idx = _find_subcommand(args)

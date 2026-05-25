@@ -173,6 +173,11 @@ def print_bash_completion():
         COMPREPLY+=("$val")
     done <<<"$completions"
 
+    # Inject podsock-specific subcommands when at the subcommand position
+    if [[ -z "$subcmd" && "$cur" != -* ]]; then
+        COMPREPLY+=($(compgen -W "shell helm" -- "$cur"))
+    fi
+
     # Apply Cobra directives
     local shellCompDirectiveNoSpace=2
     local shellCompDirectiveNoFileComp=4

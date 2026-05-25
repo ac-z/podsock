@@ -1,4 +1,4 @@
-# Podsock
+# Podsock 🧦
 
 Podsock is an opinionated podman CLI wrapper that doesn't abstract away the underlying podman CLI. It adds convenient shorthand flags and subcommands for common container use cases. Most of what podsock does pertains to breaking isolation only as much as is needed for a given task. 
 

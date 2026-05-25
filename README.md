@@ -2,8 +2,8 @@
 
 Podsock is an opinionated podman CLI wrapper that doesn't abstract away the underlying podman CLI. It adds convenient shorthand flags and subcommands for common container use cases. Most of what podsock does pertains to breaking isolation only as much as is needed for a given task. 
 
-Common tools like toolbox and distrobox are great for quickly installing and using OS-level packages from trusted distros to work in your home directory, but any namespace that can see your home directory is no place to run in-development software with sprawling dependencies.
 More and more commonly it is the case that we need things like nightly compilers and giant unsupervisable package manager ecosystems that carry with them inherent security risks.
+Common tools like toolbox and distrobox are great for quickly installing and using OS-level packages from trusted distros to work in your home directory, but any namespace that can see your home directory is no place to run in-development software with sprawling dependencies.
 Podsock is designed to facilitate fast setup of secure containers for desktop use, and fast access to running containers, while letting you trim down the podman flags more precisely later.
 
 No containers created via podsock have any dependency on podsock. You won't get any surprises accessing your containers without it later.

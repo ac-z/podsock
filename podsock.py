@@ -123,11 +123,17 @@ def print_bash_completion():
     if type -t _podman &>/dev/null; then
         local old_words=("${COMP_WORDS[@]}")
         local old_cword=$COMP_CWORD
+        local old_line=$COMP_LINE
+        local old_point=$COMP_POINT
         COMP_WORDS=("${podman_words[@]}")
         COMP_CWORD=$podman_cword
+        COMP_LINE="${COMP_WORDS[*]}"
+        COMP_POINT=${#COMP_LINE}
         _podman
         COMP_WORDS=("${old_words[@]}")
         COMP_CWORD=$old_cword
+        COMP_LINE=$old_line
+        COMP_POINT=$old_point
     fi
 }
 

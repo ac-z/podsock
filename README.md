@@ -8,11 +8,11 @@ Podsock is designed to facilitate fast setup of secure containers for desktop us
 
 No containers created via podsock have any dependency on podsock. You won't get any surprises accessing your containers without it later.
 
-[!WARNING]
-In its current form, podsock always disables SELinux labeling and shares the host user's UID and username with the container.
+> [!WARNING]
+> In its current form, podsock always disables SELinux labeling and shares the host user's UID and username with the container.
 
-[!NOTE]
-The WORKDIR specified in the container image will be the home directory for the host user in the container. It is recommended to ensure your container image has a WORKDIR which is writable to all users, or to make changes via a root shell after container creation to ensure your user can write to $HOME.
+> [!NOTE]
+> The WORKDIR specified in the container image will be the home directory for the host user in the container. It is recommended to ensure your container image has a WORKDIR which is writable to all users, or to make changes via a root shell after container creation to ensure your user can write to $HOME.
 
 ## Usage
 

@@ -225,7 +225,7 @@ def print_bash_completion():
     fi
 }
 
-complete -o default -F _podsock podsock
+complete -o default -F _podsock "${BASH_SOURCE##*/}"
 """)
 
 

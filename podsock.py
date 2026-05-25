@@ -202,8 +202,18 @@ def print_bash_completion():
         COMPREPLY+=("$val")
     done <<<"$completions"
 
+    # Detect if we're past the subcommand position (any non-flag word typed)
+    local past_subcmd=0
+    for ((i=1; i<COMP_CWORD; i++)); do
+        local w="${COMP_WORDS[i]}"
+        [[ "$w" == +* ]] && continue
+        [[ "$w" == -* ]] && continue
+        past_subcmd=1
+        break
+    done
+
     # Inject podsock-specific subcommands when at the subcommand position
-    if [[ -z "$subcmd" && "$cur" != -* ]]; then
+    if [[ $past_subcmd -eq 0 && "$cur" != -* ]]; then
         while IFS= read -r line; do
             COMPREPLY+=("$line")
         done < <(compgen -W "shell helm" -- "$cur")

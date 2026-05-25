@@ -153,7 +153,7 @@ def test_bash_completion_output():
     result = _run(["--bash-completion"])
     assert result.returncode == 0
     assert "_podsock" in result.stdout
-    assert "complete -o default -F _podsock podsock" in result.stdout
+    assert 'complete -o default -F _podsock "${BASH_SOURCE##*/}"' in result.stdout
 
 
 # ---- Bash completion functional tests ----
@@ -174,6 +174,8 @@ podman() {
         echo -e "--user\n--workdir\n--tty\n:4"
     elif [[ "$a1" == "start" && $# -eq 2 && -z "$a2" ]]; then
         echo -e "--attach\n--interactive\n:4"
+    elif [[ "$a1" == "stop" && $# -eq 2 && -z "$a2" ]]; then
+        echo -e "mycontainer\nshell\nhelm\n:4"
     elif [[ "$a1" == "ru" && $# -eq 1 ]]; then
         echo -e "run\n:0"
     elif [[ "$a1" == "run" && "$a2" == "--name" && $# -eq 2 ]]; then
@@ -298,3 +300,15 @@ class TestBashCompletionPodmanDelegation:
     def test_plusflag_stripped_before_delegate(self):
         out = _bash_complete(["podsock", "+t", "run", ""])
         assert "--interactive" in out
+
+    def test_no_shell_helm_in_container_lists(self):
+        # podman stop returns container names; shell/helm should not be injected
+        out = _bash_complete(["podsock", "stop", ""])
+        assert "mycontainer" in out
+        # "shell" and "helm" are container names from podman, not injected subcommands
+        # but we verify they only appear once (from podman) and that no extra injection happens
+        # The real check: shell/helm should NOT be added as subcommand completions here
+        words = out.split()
+        assert words.count("shell") == 1
+        assert words.count("helm") == 1
+        assert "mycontainer" in words

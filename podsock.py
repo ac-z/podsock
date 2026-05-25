@@ -77,7 +77,7 @@ def print_bash_completion():
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local i subcmd=""
 
-    # Detect subcommand to determine valid +flags
+    # Detect subcommand for +flags
     for ((i=1; i<COMP_CWORD; i++)); do
         case "${COMP_WORDS[i]}" in
             run|create) subcmd="${COMP_WORDS[i]}"; break ;;
@@ -97,47 +97,99 @@ def print_bash_completion():
         return 0
     fi
 
-    # Delegate to podman completion after stripping +flags and mapping subcommands
-    local podman_words=("podman")
-    local podman_cword=0
+    # Build podman-equivalent args string (strip +flags, map subcommands)
+    local podman_args=""
     local found=0
-
-    for ((i=1; i<=${#COMP_WORDS[@]}-1; i++)); do
+    for ((i=1; i<COMP_CWORD; i++)); do
         local w="${COMP_WORDS[i]}"
         [[ "$w" == +* ]] && continue
-        podman_words+=("$w")
-        if [[ $i -lt $COMP_CWORD ]]; then
-            ((podman_cword++))
-        elif [[ $i -eq $COMP_CWORD ]]; then
-            podman_cword=$((${#podman_words[@]} - 1))
-        fi
         if [[ $found -eq 0 ]]; then
             case "$w" in
-                shell) podman_words[-1]="exec"; found=1 ;;
-                helm)  podman_words[-1]="start"; found=1 ;;
-                run|create|exec|ps|logs|images|build|push|pull|import|export|stats|top|pause|unpause|stop|start|restart|kill|rm|wait|mount|umount|attach|diff|inspect|history|info|version|generate|play|kube|manifest|network|volume|pod|system) found=1 ;;
+                shell) w="exec" ;;
+                helm)  w="start" ;;
             esac
+            found=1
+        fi
+        if [[ -z "$podman_args" ]]; then
+            podman_args="$w"
+        else
+            podman_args="$podman_args $w"
         fi
     done
 
-    if type -t _podman &>/dev/null; then
-        local old_words=("${COMP_WORDS[@]}")
-        local old_cword=$COMP_CWORD
-        local old_line=$COMP_LINE
-        local old_point=$COMP_POINT
-        COMP_WORDS=("${podman_words[@]}")
-        COMP_CWORD=$podman_cword
-        COMP_LINE="${COMP_WORDS[*]}"
-        COMP_POINT=${#COMP_LINE}
-        _podman
-        COMP_WORDS=("${old_words[@]}")
-        COMP_CWORD=$old_cword
-        COMP_LINE=$old_line
-        COMP_POINT=$old_point
+    # Include current word if non-empty
+    if [[ -n "$cur" ]]; then
+        if [[ -z "$podman_args" ]]; then
+            podman_args="$cur"
+        else
+            podman_args="$podman_args $cur"
+        fi
+    fi
+
+    # Build the command to request completions from podman
+    local requestComp="podman __complete $podman_args"
+
+    # Cobra expects an empty arg when the cursor is at a word boundary
+    local lastParam="${COMP_WORDS[COMP_CWORD]}"
+    local lastChar=${lastParam:$((${#lastParam}-1)):1}
+    if [[ -z "$cur" && "$lastChar" != "=" ]]; then
+        requestComp="$requestComp ''"
+    fi
+
+    # Handle flag-with-value completions (e.g. --name=myi<TAB>)
+    local cur_prefix=""
+    if [[ "$cur" == -*=* ]]; then
+        cur_prefix="${cur%%=*}="
+        cur="${cur#*=}"
+    fi
+
+    local out
+    out=$(eval "$requestComp" 2>/dev/null)
+
+    if [[ -z "$out" ]]; then
+        return
+    fi
+
+    # Extract Cobra directive (bitmask after the last colon)
+    local directive="${out##*:}"
+    local completions="${out%:*}"
+    if [[ "$directive" == "$out" ]]; then
+        directive=0
+    fi
+
+    # Parse completions into COMPREPLY
+    local tab=$'\t'
+    local comp val
+    while IFS= read -r comp; do
+        [[ -z "$comp" ]] && continue
+        # Skip activeHelp lines
+        [[ "$comp" == _activeHelp_* ]] && continue
+        # Strip description
+        val="${comp%%$tab*}"
+        # Strip flag prefix for =-style flag values
+        if [[ -n "$cur_prefix" && "$val" == "$cur_prefix"* ]]; then
+            val="${val#$cur_prefix}"
+        fi
+        COMPREPLY+=("$val")
+    done <<<"$completions"
+
+    # Apply Cobra directives
+    local shellCompDirectiveNoSpace=2
+    local shellCompDirectiveNoFileComp=4
+
+    if (( (directive & shellCompDirectiveNoSpace) != 0 )); then
+        if [[ $(type -t compopt) == builtin ]]; then
+            compopt -o nospace
+        fi
+    fi
+    if (( (directive & shellCompDirectiveNoFileComp) != 0 )); then
+        if [[ $(type -t compopt) == builtin ]]; then
+            compopt +o default
+        fi
     fi
 }
 
-complete -F _podsock podsock
+complete -o default -F _podsock podsock
 """)
 
 

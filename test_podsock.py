@@ -28,7 +28,7 @@ tests = [
     (["create", "--name", "test", "+Tngd?", "imagename"], "success", ["create", "--interactive", "--tty", "--network=host", "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE", "--cap-add=SYS_PTRACE,PERFMON", "--name", "test", "imagename"]),
 
     # ---- Bash completion ----
-    (["--bash-completion"], "success", ["_podsock", "complete -F _podsock podsock"]),
+    (["--bash-completion"], "success", ["_podsock", "complete -o default -F _podsock podsock"]),
 
     # ---- Help ----
     (["+?", "run", "--help"], "help", ["Podsock", "Available +flags"]),
@@ -108,6 +108,42 @@ completion_script = subprocess.check_output(
 
 bash_test = '''
 set -e
+
+# compopt doesn't work outside a real completion function
+compopt() { :; }
+
+# Mock podman that responds to __complete
+podman() {
+    if [[ "$1" != "__complete" ]]; then
+        echo "fake: unexpected podman call" >&2; return 1
+    fi
+    shift
+    local a1="$1" a2="$2" a3="$3"
+    if [[ $# -eq 1 && -z "$a1" ]]; then
+        # podman __complete ''
+        echo -e "run\nexec\ncreate\nps\n:4"
+    elif [[ "$a1" == "run" && $# -eq 2 && -z "$a2" ]]; then
+        # podman __complete run ''
+        echo -e "--interactive\n--name\n--rm\n--tty\n:4"
+    elif [[ "$a1" == "exec" && $# -eq 2 && -z "$a2" ]]; then
+        # podman __complete exec '' (mapped from shell)
+        echo -e "--user\n--workdir\n--tty\n:4"
+    elif [[ "$a1" == "start" && $# -eq 2 && -z "$a2" ]]; then
+        # podman __complete start '' (mapped from helm)
+        echo -e "--attach\n--interactive\n:4"
+    elif [[ "$a1" == "ru" && $# -eq 1 ]]; then
+        echo -e "run\n:0"
+    elif [[ "$a1" == "run" && "$a2" == "--name" && $# -eq 2 ]]; then
+        echo -e "--name\tset a name\n:4"
+    elif [[ "$a1" == "run" && "$a2" == "--name=" && $# -eq 3 && -z "$a3" ]]; then
+        echo -e "myimage\nmyother\n:4"
+    elif [[ "$a1" == "run" && "$a2" == "--name=myi" && $# -eq 2 ]]; then
+        echo -e "--name=myimage\n--name=myother\n:4"
+    else
+        echo -e ":0"
+    fi
+}
+
 ''' + completion_script + '''
 test_flags() {
     COMP_WORDS=("$@")
@@ -139,9 +175,43 @@ out=$(test_flags podsock "+")
 out=$(test_flags podsock run "+t")
 [[ "$out" == "+t" ]] || { echo "FAIL: exact +t got: $out"; exit 1; }
 
-# after +flag should delegate (COMPREPLY empty when _podman absent)
+# podman __complete '' (empty args → subcommands)
+out=$(test_flags podsock "")
+[[ "$out" == *"run"* ]] || { echo "FAIL: subcommands missing 'run' got: $out"; exit 1; }
+[[ "$out" == *"exec"* ]] || { echo "FAIL: subcommands missing 'exec' got: $out"; exit 1; }
+
+# podman __complete run '' (run options)
+out=$(test_flags podsock run "")
+[[ "$out" == *"--interactive"* ]] || { echo "FAIL: run options missing '--interactive' got: $out"; exit 1; }
+[[ "$out" == *"--name"* ]] || { echo "FAIL: run options missing '--name' got: $out"; exit 1; }
+
+# podman __complete exec '' (shell mapped to exec)
+out=$(test_flags podsock shell "")
+[[ "$out" == *"--user"* ]] || { echo "FAIL: shell(exec) options missing '--user' got: $out"; exit 1; }
+
+# podman __complete start '' (helm mapped to start)
+out=$(test_flags podsock helm "")
+[[ "$out" == *"--attach"* ]] || { echo "FAIL: helm(start) options missing '--attach' got: $out"; exit 1; }
+
+# podman __complete ru (partial subcommand)
+out=$(test_flags podsock ru)
+[[ "$out" == "run" ]] || { echo "FAIL: partial 'ru' should give 'run' got: $out"; exit 1; }
+
+# podman __complete run --name (flag completion)
+out=$(test_flags podsock run --name)
+[[ "$out" == "--name" ]] || { echo "FAIL: flag '--name' expected got: $out"; exit 1; }
+
+# podman __complete run --name= '' (flag value after =)
+out=$(test_flags podsock run "--name=" "")
+[[ "$out" == *"myimage"* ]] || { echo "FAIL: flag value missing 'myimage' got: $out"; exit 1; }
+
+# podman __complete run --name=myi (flag value with prefix, strip --name=)
+out=$(test_flags podsock run "--name=myi")
+[[ "$out" == *"myimage"* ]] || { echo "FAIL: flag value prefix strip missing 'myimage' got: $out"; exit 1; }
+
+# +flag stripped before delegation
 out=$(test_flags podsock "+t" run "")
-[[ -z "$out" ]] || { echo "FAIL: expected empty after flag delegation got: $out"; exit 1; }
+[[ "$out" == *"--interactive"* ]] || { echo "FAIL: +t strip before delegate missing '--interactive' got: $out"; exit 1; }
 
 echo "BASH_PASS"
 '''

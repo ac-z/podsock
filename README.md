@@ -72,6 +72,17 @@ podsock +? run ubuntu echo hello
 
 ## Installation
 
+### Dependencies
+
+Runtime dependencies:
+* Python 3 (tested with 3.14)
+* Podman, unless you're only doing dry runs (`+?`)
+
+Testing dependencies:
+* Pytest
+
+### Install
+
 To install to `~/.local`:
 
 ```bash

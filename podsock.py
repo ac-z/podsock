@@ -113,8 +113,8 @@ def print_bash_completion():
         return 0
     fi
 
-    # Build podman-equivalent args string (strip +flags, map subcommands)
-    local podman_args=""
+    # Build podman-equivalent args array (strip +flags, map subcommands)
+    local podman_args=()
     local found=0
     for ((i=1; i<COMP_CWORD; i++)); do
         local w="${COMP_WORDS[i]}"
@@ -126,30 +126,23 @@ def print_bash_completion():
             esac
             found=1
         fi
-        if [[ -z "$podman_args" ]]; then
-            podman_args="$w"
-        else
-            podman_args="$podman_args $w"
-        fi
+        podman_args+=("$w")
     done
 
     # Include current word if non-empty
     if [[ -n "$cur" ]]; then
-        if [[ -z "$podman_args" ]]; then
-            podman_args="$cur"
-        else
-            podman_args="$podman_args $cur"
-        fi
+        podman_args+=("$cur")
     fi
-
-    # Build the command to request completions from podman
-    local requestComp="podman __complete $podman_args"
 
     # Cobra expects an empty arg when the cursor is at a word boundary
     local lastParam="${COMP_WORDS[COMP_CWORD]}"
     local lastChar=${lastParam:$((${#lastParam}-1)):1}
+
+    local out
     if [[ -z "$cur" && "$lastChar" != "=" ]]; then
-        requestComp="$requestComp ''"
+        out=$(podman __complete "${podman_args[@]}" '' 2>/dev/null)
+    else
+        out=$(podman __complete "${podman_args[@]}" 2>/dev/null)
     fi
 
     # Handle flag-with-value completions (e.g. --name=myi<TAB>)
@@ -158,9 +151,6 @@ def print_bash_completion():
         cur_prefix="${cur%%=*}="
         cur="${cur#*=}"
     fi
-
-    local out
-    out=$(eval "$requestComp" 2>/dev/null)
 
     if [[ -z "$out" ]]; then
         return

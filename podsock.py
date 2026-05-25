@@ -85,15 +85,31 @@ def print_bash_completion():
         esac
     done
 
-    # Complete +flags
+    # Complete +flags (chainable, e.g. +Tdnws?)
     if [[ "$cur" == +* ]]; then
-        local flags=""
+        local avail=""
         case "$subcmd" in
-            run|create) flags="+t +T +w +s +g +n +d +?" ;;
-            shell|helm) flags="+?" ;;
-            *) flags="+?" ;;
+            run|create) avail="tTwsgnd?" ;;
+            shell|helm) avail="?" ;;
+            *) avail="?" ;;
         esac
-        COMPREPLY=($(compgen -W "$flags" -- "$cur"))
+
+        local used=""
+        for ((i=1; i<=COMP_CWORD; i++)); do
+            local w="${COMP_WORDS[i]}"
+            [[ "$w" == +* ]] && used="${used}${w:1}"
+        done
+
+        local remaining=""
+        for ((i=0; i<${#avail}; i++)); do
+            local c="${avail:$i:1}"
+            [[ "$used" != *"$c"* ]] && remaining="${remaining}${c}"
+        done
+
+        COMPREPLY=()
+        for ((i=0; i<${#remaining}; i++)); do
+            COMPREPLY+=("$cur${remaining:$i:1}")
+        done
         return 0
     fi
 

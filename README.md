@@ -1,6 +1,18 @@
 # Podsock
 
-Podsock is a small wrapper around `podman` that adds convenient shorthand flags and subcommands for common container runtime options. Instead of typing out long `--interactive --tty --env=TERM=...` sequences, you can use short `+flags` like `+T` for terminal interactivity, `+w` for Wayland forwarding, `+g` for GPU access, and more.
+Podsock is an opinionated podman CLI wrapper that doesn't abstract away the underlying podman CLI. It adds convenient shorthand flags and subcommands for common container use cases. Most of what podsock does pertains to breaking isolation only as much as is needed for a given task. 
+
+Common tools like toolbox and distrobox are great for quickly installing and using OS-level packages from trusted distros to work in your home directory, but any namespace that can see your home directory is no place to run in-development software with sprawling dependencies.
+More and more commonly it is the case that we need things like nightly compilers and giant unsupervisable package manager ecosystems that carry with them inherent security risks.
+Podsock is designed to facilitate fast setup of secure containers for desktop use, and fast access to running containers, while letting you trim down the podman flags more precisely later.
+
+No containers created via podsock have any dependency on podsock. You won't get any surprises accessing your containers without it later.
+
+[!WARNING]
+In its current form, podsock always disables SELinux labeling and shares the host user's UID and username with the container.
+
+[!NOTE]
+The WORKDIR specified in the container image will be the home directory for the host user in the container. It is recommended to ensure your container image has a WORKDIR which is writable to all users, or to make changes via a root shell after container creation to ensure your user can write to $HOME.
 
 ## Usage
 
@@ -91,16 +103,16 @@ If you create a bash alias for podsock, you can register completions for it by r
 
 ```bash
 # ~/.bashrc
-alias ps='podsock'
+alias pod='podsock'
 ```
 
 Then run:
 
 ```bash
-make completions ALIAS=ps
+make completions ALIAS=pod
 ```
 
-This creates a symlink so `ps` gets the same completions as `podsock`.
+This creates a symlink so `pod` gets the same completions as `podsock`.
 
 You can also generate the completion script directly without installing:
 

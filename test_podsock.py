@@ -428,6 +428,12 @@ class TestHelpers:
         spec.loader.exec_module(mod)
         original_rtdir = mod.PODSOCK_RTDIR
         mod.PODSOCK_RTDIR = str(tmp_path)
+        # Create a .desktop file to verify it's deleted on rm
+        desktop_dir = os.path.expanduser("~/.local/share/applications")
+        os.makedirs(desktop_dir, exist_ok=True)
+        desktop_path = os.path.join(desktop_dir, "podsock_myapp.desktop")
+        with open(desktop_path, "w") as f:
+            f.write("[Desktop Entry]\n")
         try:
             socket_dir = mod._proxy_socket_dir("myapp")
             os.makedirs(socket_dir, exist_ok=True)
@@ -436,8 +442,121 @@ class TestHelpers:
                 f.write("999999\n")
             mod._stop_xdg_dbus_proxy("podsock_myapp", "myapp", remove_dir=True)
             assert not os.path.exists(socket_dir)
+            assert not os.path.exists(desktop_path)
         finally:
             mod.PODSOCK_RTDIR = original_rtdir
+            if os.path.exists(desktop_path):
+                os.unlink(desktop_path)
+
+
+# ---- cleanup command ----
+class TestCleanup:
+    def _mock_podman_ps(self, mod, containers_json):
+        """Monkey-patch subprocess.run to return mock podman ps output."""
+        import json
+        original_run = subprocess.run
+
+        def fake_run(cmd, **kwargs):
+            if cmd[:3] == ["podman", "ps", "-a"]:
+                class FakeResult:
+                    returncode = 0
+                    stdout = json.dumps(containers_json)
+                    stderr = ""
+                return FakeResult()
+            return original_run(cmd, **kwargs)
+
+        mod.subprocess.run = fake_run
+
+    def test_cleans_stopped_skips_running(self, tmp_path, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        # Override socket base to tmp_path
+        original_dir = mod._proxy_socket_dir
+        mod._proxy_socket_dir = lambda n: os.path.join(str(tmp_path), n)
+
+        # Create socket dirs and proxy.pid files for two containers
+        for name in ("running_app", "stopped_app"):
+            d = os.path.join(str(tmp_path), name)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "proxy.pid"), "w") as f:
+                f.write("999999\n")
+            with open(os.path.join(d, "proxy.meta"), "w") as f:
+                f.write(f"app_id=podsock_{name}\nname={name}\n")
+
+        # Create .desktop files
+        desktop_dir = os.path.expanduser("~/.local/share/applications")
+        os.makedirs(desktop_dir, exist_ok=True)
+        for name in ("running_app", "stopped_app"):
+            with open(os.path.join(desktop_dir, f"podsock_{name}.desktop"), "w") as f:
+                f.write("[Desktop Entry]\n")
+
+        containers = [
+            {
+                "Names": ["running_app"],
+                "State": "running",
+                "Labels": {"podsock.app_id": "podsock_running_app", "podsock.name": "running_app"},
+            },
+            {
+                "Names": ["stopped_app"],
+                "State": "exited",
+                "Labels": {"podsock.app_id": "podsock_stopped_app", "podsock.name": "stopped_app"},
+            },
+        ]
+        self._mock_podman_ps(mod, containers)
+
+        try:
+            mod._cleanup_dbus()
+            # Stopped container: proxy process stopped but directory kept
+            # so podman start still works after a reboot
+            assert os.path.exists(os.path.join(str(tmp_path), "stopped_app"))
+            assert not os.path.exists(os.path.join(str(tmp_path), "stopped_app", "proxy.pid"))
+            # .desktop file must be preserved so the launcher still works
+            assert os.path.exists(os.path.join(desktop_dir, "podsock_stopped_app.desktop"))
+            # Running container should be fully preserved
+            assert os.path.exists(os.path.join(str(tmp_path), "running_app"))
+            assert os.path.exists(os.path.join(desktop_dir, "podsock_running_app.desktop"))
+        finally:
+            mod._proxy_socket_dir = original_dir
+            for name in ("running_app", "stopped_app"):
+                p = os.path.join(desktop_dir, f"podsock_{name}.desktop")
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_cleans_orphans(self, tmp_path, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        original_dir = mod._proxy_socket_dir
+        mod._proxy_socket_dir = lambda n: os.path.join(str(tmp_path), n)
+
+        # Create orphan socket dir with no matching container
+        d = os.path.join(str(tmp_path), "orphan_app")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "proxy.pid"), "w") as f:
+            f.write("999999\n")
+
+        desktop_dir = os.path.expanduser("~/.local/share/applications")
+        os.makedirs(desktop_dir, exist_ok=True)
+        with open(os.path.join(desktop_dir, "podsock_orphan_app.desktop"), "w") as f:
+            f.write("[Desktop Entry]\n")
+
+        # No containers with podsock labels
+        self._mock_podman_ps(mod, [])
+
+        try:
+            mod._cleanup_dbus()
+            assert not os.path.exists(d)
+            assert not os.path.exists(os.path.join(desktop_dir, "podsock_orphan_app.desktop"))
+        finally:
+            mod._proxy_socket_dir = original_dir
+            p = os.path.join(desktop_dir, "podsock_orphan_app.desktop")
+            if os.path.exists(p):
+                os.unlink(p)
 
 
 # ---- Bash completion includes A and D ----

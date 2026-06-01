@@ -397,11 +397,108 @@ def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
     else:
         die("Error: xdg-dbus-proxy failed to create socket")
 
+    # Write identifying metadata for cleanup-dbus
+    meta_path = os.path.join(socket_dir, "proxy.meta")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        f.write(f"app_id={app_id}\nname={name}\n")
+
     return socket_path
 
 
+def _cleanup_dbus():
+    """Clean up stale D-Bus proxies and .desktop files for stopped containers."""
+    import json
+
+    # Get all containers with podsock labels
+    try:
+        out = subprocess.run(
+            ["podman", "ps", "-a", "--filter", "label=podsock.app_id", "--format", "json"],
+            capture_output=True, text=True, check=False,
+        )
+        containers = json.loads(out.stdout) if out.stdout.strip() else []
+        if not isinstance(containers, list):
+            containers = []
+    except Exception as e:
+        die(f"Error: failed to list podman containers: {e}")
+
+    running = []
+    stopped = []
+    for c in containers:
+        labels = c.get("Labels") or {}
+        app_id = labels.get("podsock.app_id")
+        name = labels.get("podsock.name") or (c.get("Names", [None])[0] if c.get("Names") else None) or c.get("Id")
+        state = c.get("State", "").lower()
+        if app_id and name:
+            if state in ("running", "up", "paused"):
+                running.append((app_id, name))
+            else:
+                stopped.append((app_id, name))
+
+    cleaned = 0
+
+    # Clean up stopped containers: stop proxy (to save resources) but keep
+    # the socket directory and .desktop file so the container can be restarted.
+    for app_id, name in stopped:
+        socket_dir = _proxy_socket_dir(name)
+        if os.path.isdir(socket_dir):
+            _stop_xdg_dbus_proxy(app_id, name)
+            cleaned += 1
+            print(f"Cleaned up proxy for {name}")
+
+    # Clean up orphan socket directories (container fully removed)
+    base_dir = os.path.dirname(_proxy_socket_dir("x"))
+    known_names = set(name for _, name in running + stopped)
+    if os.path.isdir(base_dir):
+        for entry in os.listdir(base_dir):
+            path = os.path.join(base_dir, entry)
+            if not os.path.isdir(path):
+                continue
+            if entry not in known_names:
+                import shutil
+                shutil.rmtree(path, ignore_errors=True)
+                cleaned += 1
+                print(f"Cleaned up orphan proxy directory for {entry}")
+
+    # Clean up orphan .desktop files (container fully removed)
+    desktop_dir = os.path.expanduser("~/.local/share/applications")
+    known_app_ids = set(a for a, _ in running + stopped)
+    if os.path.isdir(desktop_dir):
+        for entry in os.listdir(desktop_dir):
+            if not entry.startswith("podsock_") or not entry.endswith(".desktop"):
+                continue
+            app_id = entry[:-8]
+            if app_id not in known_app_ids:
+                _delete_desktop_file(app_id)
+                cleaned += 1
+                print(f"Cleaned up orphan .desktop file for {app_id}")
+
+    # Clean up stray systemd units for stopped/orphan containers
+    try:
+        units_out = subprocess.run(
+            ["systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "app-podsock_*.service"],
+            capture_output=True, text=True, check=False,
+        )
+        for line in units_out.stdout.strip().splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            unit = parts[0]
+            if not unit.startswith("app-podsock_") or not unit.endswith(".service"):
+                continue
+            app_id = unit[len("app-"):-len(".service")]
+            if app_id not in known_app_ids:
+                subprocess.run(["systemctl", "--user", "stop", unit],
+                              check=False, capture_output=True)
+                cleaned += 1
+                print(f"Stopped orphan systemd unit {unit}")
+    except FileNotFoundError:
+        pass
+
+    print(f"Cleaned up {cleaned} item(s), preserved {len(running)} running container(s)")
+
+
 def _stop_xdg_dbus_proxy(app_id, name, remove_dir=False):
-    """Stop the proxy, optionally remove socket directory, and delete .desktop file."""
+    """Stop the proxy. Only delete .desktop file when remove_dir=True (i.e., on rm)."""
     unit_name = f"app-{app_id}.service"
     try:
         subprocess.run(["systemctl", "--user", "stop", unit_name],
@@ -426,7 +523,7 @@ def _stop_xdg_dbus_proxy(app_id, name, remove_dir=False):
     if remove_dir and os.path.isdir(socket_dir):
         import shutil
         shutil.rmtree(socket_dir, ignore_errors=True)
-    _delete_desktop_file(app_id)
+        _delete_desktop_file(app_id)
 
 
 def _podman_inspect_labels(name_or_id):
@@ -812,6 +909,9 @@ def main():
             if arg == subcommand:
                 continue
             cmd.append(arg)
+    elif subcommand == "cleanup":
+        _cleanup_dbus()
+        sys.exit(0)
     elif subcommand:
         cmd.append(subcommand)
         cmd.extend(flag_args)

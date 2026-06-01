@@ -69,6 +69,14 @@ def show_help(subcommand=None):
         print("Show help for a podsock command.")
         print("Usage: podsock help <command>")
         return
+    elif subcommand == "cleanup":
+        print("Clean up stale D-Bus proxies and .desktop files for deleted containers.")
+        print("Usage: podsock cleanup")
+        print()
+        print("Scans all containers with podsock labels. Running containers are left untouched.")
+        print("Stopped containers have their proxy stopped. Fully removed (orphan) containers")
+        print("have both their proxy directories and .desktop files cleaned up.")
+        return
     else:
         flags = ["?"] if subcommand else []
 
@@ -95,6 +103,7 @@ def show_help(subcommand=None):
         print("Subcommands:")
         print("  shell <container> [command]  Run a shell (or command) in a running container")
         print("  helm <container>             Start a container interactively")
+        print("  cleanup                      Clean up stale D-Bus proxies and .desktop files")
         print()
         print("Use 'podsock <command> --help' for command-specific help.")
         print()
@@ -228,7 +237,7 @@ def print_bash_completion():
     if [[ $past_subcmd -eq 0 && "$cur" != -* ]]; then
         while IFS= read -r line; do
             COMPREPLY+=("$line")
-        done < <(compgen -W "shell helm" -- "$cur")
+        done < <(compgen -W "shell helm cleanup" -- "$cur")
     fi
 
     # Apply Cobra directives
@@ -424,7 +433,7 @@ def _cleanup_dbus():
         name = labels.get("podsock.name") or (c.get("Names", [None])[0] if c.get("Names") else None) or c.get("Id")
         state = c.get("State", "").lower()
         if app_id and name:
-            if state in ("running", "up", "paused"):
+            if state in ("running", "up", "paused", "restarting"):
                 running.append((app_id, name))
             else:
                 stopped.append((app_id, name))

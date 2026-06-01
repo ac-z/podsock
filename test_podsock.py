@@ -522,6 +522,37 @@ class TestCleanup:
                 if os.path.exists(p):
                     os.unlink(p)
 
+    def test_skips_restarting(self, tmp_path, monkeypatch):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        original_dir = mod._proxy_socket_dir
+        mod._proxy_socket_dir = lambda n: os.path.join(str(tmp_path), n)
+
+        d = os.path.join(str(tmp_path), "restarting_app")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "proxy.pid"), "w") as f:
+            f.write("999999\n")
+
+        containers = [
+            {
+                "Names": ["restarting_app"],
+                "State": "Restarting",
+                "Labels": {"podsock.app_id": "podsock_restarting_app", "podsock.name": "restarting_app"},
+            },
+        ]
+        self._mock_podman_ps(mod, containers)
+
+        try:
+            mod._cleanup_dbus()
+            # Restarting container proxy must be preserved
+            assert os.path.exists(d)
+            assert os.path.exists(os.path.join(d, "proxy.pid"))
+        finally:
+            mod._proxy_socket_dir = original_dir
+
     def test_cleans_orphans(self, tmp_path, monkeypatch):
         import importlib.util
         spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
@@ -582,6 +613,7 @@ class TestBashCompletionPodmanDelegation:
         assert "exec" in out
         assert "shell" in out
         assert "helm" in out
+        assert "cleanup" in out
 
     def test_run_options(self):
         out = _bash_complete(["podsock", "run", ""])

@@ -21,10 +21,12 @@ Podsock - podman wrapper with +flags.
 """
 
 import os
+import re
 import shlex
 import stat
 import subprocess
 import sys
+import time
 
 
 PODSOCK_INIT = os.environ.get("PODSOCK_INIT", "1")
@@ -39,9 +41,11 @@ _FLAG_DESCS = {
     "g": "GPU/graphics device access",
     "n": "Host network with extra capabilities",
     "d": "Debug capabilities (ptrace, perfmon)",
+    "A": "Register as desktop app (creates .desktop launcher)",
+    "D": "Enable XDG Desktop Portal access (implies +A, filtered D-Bus)",
     "?": "Dry run (print command without executing)",
 }
-_ALLOWED_FLAGS = {"run": "tTwsgnd?", "create": "tTwsgnd?"}
+_ALLOWED_FLAGS = {"run": "tTwsgndAD?", "create": "tTwsgndAD?"}
 
 
 def die(msg):
@@ -72,6 +76,14 @@ def show_help(subcommand=None):
         print(f"Available +flags for '{subcommand}':")
         for f in flags:
             print(f"  +{f}  {_FLAG_DESCS[f]}")
+        print()
+
+    if subcommand in ("run", "create"):
+        print(
+            "WARNING: +D does NOT filter individual portal interfaces. Access control is\n"
+            "delegated to the desktop environment's permission dialogs. Treat untrusted\n"
+            "apps with the same caution as a Flatpak with full portal access."
+        )
         print()
 
     podman_cmd = {"shell": "exec", "helm": "start"}.get(subcommand, subcommand)
@@ -108,7 +120,7 @@ def print_bash_completion():
     if [[ "$cur" == +* ]]; then
         local avail=""
         case "$subcmd" in
-            run|create) avail="tTwsgnd?" ;;
+            run|create) avail="tTwsgndAD?" ;;
             shell|helm) avail="?" ;;
             *) avail="?" ;;
         esac
@@ -239,6 +251,227 @@ complete -o default -F _podsock "${BASH_SOURCE##*/}"
 """)
 
 
+# ---------------------------------------------------------------------------
+# App ID / .desktop / proxy helpers
+# ---------------------------------------------------------------------------
+
+_DESKTOP_DIR = os.path.expanduser("~/.local/share/applications")
+
+
+def _generate_app_id(name):
+    """Generate a D-Bus app ID from a container name."""
+    if name:
+        # Replace all non-alphanumeric with underscore
+        sanitized = re.sub(r"[^A-Za-z0-9]", "_", name)
+        # Must start with a letter
+        if sanitized and sanitized[0].isdigit():
+            sanitized = "x" + sanitized
+    else:
+        # Unnamed container: 8-char hex
+        sanitized = os.urandom(4).hex()
+    app_id = f"podsock_{sanitized}"
+    # D-Bus name limit is 255 chars
+    return app_id[:255]
+
+
+def _desktop_file_path(app_id):
+    return os.path.join(_DESKTOP_DIR, f"{app_id}.desktop")
+
+
+def _create_desktop_file(app_id, container_name, dryrun=False):
+    """Idempotently create a .desktop launcher for the container."""
+    path = _desktop_file_path(app_id)
+    contents = (
+        "[Desktop Entry]\n"
+        f"Name=Podsock Container: {container_name}\n"
+        f"Exec=podsock helm --name={container_name}\n"
+        "Type=Application\n"
+        "Icon=application-x-executable\n"
+    )
+    if dryrun:
+        return
+    os.makedirs(_DESKTOP_DIR, exist_ok=True)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            if f.read() == contents:
+                return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(contents)
+
+
+def _delete_desktop_file(app_id):
+    path = _desktop_file_path(app_id)
+    if os.path.exists(path):
+        os.unlink(path)
+
+
+def _proxy_socket_dir(name):
+    return os.path.join(PODSOCK_RTDIR, "podsock", name)
+
+
+def _proxy_socket_path(name):
+    return os.path.join(_proxy_socket_dir(name), "bus.sock")
+
+
+def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
+    """Start a filtered xdg-dbus-proxy; return socket path."""
+    socket_dir = _proxy_socket_dir(name)
+    socket_path = _proxy_socket_path(name)
+
+    if dryrun:
+        return socket_path
+
+    # Reuse existing socket if already accepting connections
+    if os.path.exists(socket_path):
+        if not stat.S_ISSOCK(os.stat(socket_path).st_mode):
+            die(f"Error: proxy socket path exists but is not a socket: {socket_path}")
+        return socket_path
+
+    os.makedirs(socket_dir, exist_ok=True)
+
+    # Detect host session bus address
+    dbus_addr = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if not dbus_addr.startswith("unix:"):
+        die("Error: DBUS_SESSION_BUS_ADDRESS is not a unix socket (required for +D)")
+
+    proxy_bin = "xdg-dbus-proxy"
+    # Verify xdg-dbus-proxy is in PATH
+    if not any(os.path.isfile(os.path.join(p, proxy_bin)) for p in os.environ.get("PATH", "").split(":")):
+        die(f"Error: {proxy_bin} not found in PATH (required for +D)")
+
+    # Arguments: ADDRESS PATH --filter --talk=... --talk=...
+    proxy_args = [
+        proxy_bin,
+        dbus_addr,
+        socket_path,
+        "--filter",
+        "--talk=org.freedesktop.portal.Desktop",
+        "--talk=org.freedesktop.portal.Documents",
+    ]
+
+    # Try systemd-run first for per-container app ID tracking
+    unit_name = f"app-{app_id}.service"
+    systemd_run = ["systemd-run", "--user", f"--unit={unit_name}",
+                   "--property=KillMode=process",
+                   "--property=CollectMode=inactive-or-failed"] + proxy_args
+
+    systemd_used = False
+    try:
+        # Check if unit is already active (idempotent restart)
+        active = subprocess.run(
+            ["systemctl", "--user", "is-active", unit_name],
+            capture_output=True, check=False,
+        )
+        if active.returncode == 0:
+            # Unit already running; poll for socket
+            for _ in range(20):
+                if os.path.exists(socket_path):
+                    return socket_path
+                time.sleep(0.05)
+            die("Error: proxy unit is active but socket did not appear")
+        subprocess.run(systemd_run, check=True, capture_output=True)
+        systemd_used = True
+    except FileNotFoundError:
+        # systemd-run / systemctl not available
+        print("WARNING: systemd user session unavailable; portal permissions will not be tracked per-container.",
+              file=sys.stderr)
+    except subprocess.CalledProcessError:
+        # systemd-run failed for some reason; fallback
+        print("WARNING: systemd-run failed; falling back to direct proxy. Portal permissions will not be tracked per-container.",
+              file=sys.stderr)
+
+    if not systemd_used:
+        # Fallback: run proxy directly as a background subprocess
+        proc = subprocess.Popen(proxy_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Record PID for later cleanup
+        pid_path = os.path.join(socket_dir, "proxy.pid")
+        with open(pid_path, "w", encoding="utf-8") as f:
+            f.write(str(proc.pid))
+
+    # Poll for socket (systemd-run returns before socket is created)
+    for _ in range(20):
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.05)
+    else:
+        die("Error: xdg-dbus-proxy failed to create socket")
+
+    return socket_path
+
+
+def _stop_xdg_dbus_proxy(app_id, name):
+    """Stop the proxy, remove socket directory, and delete .desktop file."""
+    unit_name = f"app-{app_id}.service"
+    try:
+        subprocess.run(["systemctl", "--user", "stop", unit_name],
+                       check=False, capture_output=True)
+    except FileNotFoundError:
+        pass
+    socket_dir = _proxy_socket_dir(name)
+    # Also kill fallback proxy via PID file if present
+    pid_path = os.path.join(socket_dir, "proxy.pid")
+    if os.path.exists(pid_path):
+        try:
+            with open(pid_path, "r", encoding="utf-8") as f:
+                pid = int(f.read().strip())
+            os.kill(pid, 15)
+        except (ValueError, ProcessLookupError, OSError):
+            pass
+    if os.path.isdir(socket_dir):
+        import shutil
+        shutil.rmtree(socket_dir, ignore_errors=True)
+    _delete_desktop_file(app_id)
+
+
+def _podman_inspect_labels(name_or_id):
+    """Return dict of labels for a container, or empty dict on error."""
+    try:
+        out = subprocess.run(
+            ["podman", "inspect", "--format", "json", name_or_id],
+            capture_output=True, text=True, check=False,
+        )
+        if out.returncode != 0:
+            return {}
+        import json
+        data = json.loads(out.stdout)
+        if isinstance(data, list) and data:
+            return data[0].get("Config", {}).get("Labels") or {}
+        return {}
+    except Exception:
+        return {}
+
+
+def _extract_container_name(args):
+    """Extract --name value from args; return None if not found."""
+    for i, arg in enumerate(args):
+        if arg.startswith("--name="):
+            return arg[len("--name="):]
+        if arg == "--name" and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def _portal_flag_args(name, dryrun=False):
+    """Return extra podman args for +D (mounts + env)."""
+    socket_path = _proxy_socket_path(name)
+    doc_path = os.path.join(PODSOCK_RTDIR, "doc")
+    args = [
+        f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/bus",
+        f"--volume={socket_path}:{PODSOCK_RTDIR}/bus:ro",
+    ]
+    # Only bind-mount doc portal if it exists on the host
+    if os.path.ismount(doc_path) or os.path.isdir(doc_path):
+        args.append(f"--volume={doc_path}:{doc_path}")
+    else:
+        print(f"WARNING: {doc_path} not mounted; FileChooser portal may not work",
+              file=sys.stderr)
+    return args
+
+
+# ---------------------------------------------------------------------------
+# Flag expansion
+# ---------------------------------------------------------------------------
+
 def _expand_flag(char):
     """Expand a single podsock flag char into podman args."""
     # Terminal flags
@@ -260,7 +493,7 @@ def _expand_flag(char):
             die("Error: XDG_RUNTIME_DIR not set")
         sock = os.path.join(xdg, wl)
         if not os.path.exists(sock) or not stat.S_ISSOCK(os.stat(sock).st_mode):
-            die(f"Error: Wayland socket not found at {sock}")
+            die(f"Error: Wayland socket not found: {sock}")
         return [
             f"--env=WAYLAND_DISPLAY={wl}",
             f"--volume={sock}:{PODSOCK_RTDIR}/{wl}:ro",
@@ -272,7 +505,7 @@ def _expand_flag(char):
         if not ssh:
             die("Error: SSH_AUTH_SOCK not set")
         if not os.path.exists(ssh) or not stat.S_ISSOCK(os.stat(ssh).st_mode):
-            die(f"Error: SSH socket not found at {ssh}")
+            die(f"Error: SSH socket not found: {ssh}")
         return [
             f"--env=SSH_AUTH_SOCK={PODSOCK_RTDIR}/ssh-agent.socket",
             f"--volume={ssh}:{PODSOCK_RTDIR}/ssh-agent.socket:ro",
@@ -294,6 +527,10 @@ def _expand_flag(char):
             "--cap-add=SYS_PTRACE,PERFMON",
             "--security-opt", "seccomp=unconfined",
         ]
+
+    # App registration / portal access (handled in main(), not here)
+    elif char in ("A", "D"):
+        return []
 
     return []
 
@@ -422,6 +659,11 @@ def main():
     if "t" in seen and "T" in seen:
         die("Error: +t and +T are mutually exclusive")
 
+    has_A = "A" in seen
+    has_D = "D" in seen
+    portal = has_D
+    app_reg = has_A or has_D
+
     # ---- Pass 2: build command ----
     cmd = ["podman"]
     flag_args = []
@@ -470,6 +712,15 @@ def main():
         )
         if container_idx == -1:
             die(f"Usage: {sys.argv[0]} helm <container>")
+        container_arg = args[container_idx]
+        # If container was created with +A/+D, ensure .desktop and proxy are ready
+        labels = _podman_inspect_labels(container_arg)
+        app_id = labels.get("podsock.app_id")
+        container_name = labels.get("podsock.name") or container_arg
+        if app_id:
+            _create_desktop_file(app_id, container_name, dryrun=dryrun)
+            if labels.get("podsock.portal") == "true":
+                _start_xdg_dbus_proxy(app_id, container_name, dryrun=dryrun)
         cmd.append("start")
         cmd.extend(flag_args)
         cmd.append("-ai")
@@ -485,6 +736,71 @@ def main():
         ])
         if PODSOCK_INIT == "1":
             cmd.append("--init")
+
+        if app_reg:
+            container_name = _extract_container_name(remaining)
+            if not container_name:
+                # Generate a deterministic name so the .desktop file and socket path are stable
+                container_name = os.urandom(4).hex()
+                if not dryrun:
+                    print(f"WARNING: +A/+D used without --name; auto-generated name '{container_name}'",
+                          file=sys.stderr)
+                cmd.append(f"--name={container_name}")
+            app_id = _generate_app_id(container_name)
+            cmd.append(f"--label=podsock.app_id={app_id}")
+            cmd.append(f"--label=podsock.name={container_name}")
+            if portal:
+                cmd.append("--label=podsock.portal=true")
+            if not dryrun:
+                _create_desktop_file(app_id, container_name, dryrun=dryrun)
+            if portal and subcommand == "run":
+                socket_path = _start_xdg_dbus_proxy(app_id, container_name, dryrun=dryrun)
+                if not dryrun and not os.path.exists(socket_path):
+                    die("Error: proxy socket did not appear")
+                cmd.extend(_portal_flag_args(container_name, dryrun=dryrun))
+            elif portal and subcommand == "create":
+                # For create, add mounts/env now but do not start proxy yet
+                cmd.extend(_portal_flag_args(container_name, dryrun=dryrun))
+
+        for arg in remaining:
+            if arg == subcommand:
+                continue
+            cmd.append(arg)
+    elif subcommand == "rm":
+        # Pre-cleanup for containers that had +A/+D
+        container_idx = _find_first_positional(
+            args, subcommand_idx + 1,
+            frozenset(["--force", "--all", "--latest", "--volumes", "--depend"]),
+            frozenset("flv"),
+        )
+        if container_idx != -1:
+            container_arg = args[container_idx]
+            labels = _podman_inspect_labels(container_arg)
+            app_id = labels.get("podsock.app_id")
+            container_name = labels.get("podsock.name") or container_arg
+            if app_id:
+                _stop_xdg_dbus_proxy(app_id, container_name)
+        cmd.append("rm")
+        for arg in remaining:
+            if arg == subcommand:
+                continue
+            cmd.append(arg)
+    elif subcommand == "start":
+        # Similar to helm: ensure proxy is running for portal containers
+        container_idx = _find_first_positional(
+            args, subcommand_idx + 1,
+            frozenset(["--attach", "--interactive", "--latest", "--all", "--sig-proxy"]),
+        )
+        if container_idx != -1:
+            container_arg = args[container_idx]
+            labels = _podman_inspect_labels(container_arg)
+            app_id = labels.get("podsock.app_id")
+            container_name = labels.get("podsock.name") or container_arg
+            if app_id:
+                _create_desktop_file(app_id, container_name, dryrun=dryrun)
+                if labels.get("podsock.portal") == "true":
+                    _start_xdg_dbus_proxy(app_id, container_name, dryrun=dryrun)
+        cmd.append("start")
         for arg in remaining:
             if arg == subcommand:
                 continue

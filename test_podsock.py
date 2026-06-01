@@ -56,6 +56,14 @@ def _cmd_from_dryrun(stdout):
     return shlex.split(line) if line else []
 
 
+_A_LABELS = ["--label=podsock.app_id=podsock_myapp", "--label=podsock.name=myapp"]
+_D_LABELS = ["--label=podsock.portal=true"]
+_D_PORTAL = [
+    f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/bus",
+    f"--volume={PODSOCK_RTDIR}/podsock/myapp/bus.sock:{PODSOCK_RTDIR}/bus:ro",
+    f"--volume={PODSOCK_RTDIR}/doc:{PODSOCK_RTDIR}/doc",
+]
+
 _DRYRUN_CASES = [
     (["+?", "run", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
     (["+?t", "run", "myimage"], ["podman", "run"] + _T + _RUN_OPTS + ["myimage"]),
@@ -88,6 +96,11 @@ _DRYRUN_CASES = [
     (["+?", "shell", "-w", "/tmp", "mycontainer"], ["podman", "exec", "-it", "-w", "/tmp", "mycontainer", "bash"]),
     (["+?", "run", "myimage", "--", "-h"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "-h"]),
     (["+?", "run", "myimage", "--", "--help"], ["podman", "run"] + _RUN_OPTS + ["myimage", "--", "--help"]),
+    (["+?A", "run", "--name=myapp", "myimage"], ["podman", "run"] + _RUN_OPTS + _A_LABELS + ["--name=myapp", "myimage"]),
+    (["+?D", "run", "--name=myapp", "myimage"], ["podman", "run"] + _RUN_OPTS + _A_LABELS + _D_LABELS + _D_PORTAL + ["--name=myapp", "myimage"]),
+    (["+?AD", "run", "--name=myapp", "myimage"], ["podman", "run"] + _RUN_OPTS + _A_LABELS + _D_LABELS + _D_PORTAL + ["--name=myapp", "myimage"]),
+    (["+?A", "create", "--name=myapp", "myimage"], ["podman", "create"] + _CREATE_OPTS + _A_LABELS + ["--name=myapp", "myimage"]),
+    (["+?D", "create", "--name=myapp", "myimage"], ["podman", "create"] + _CREATE_OPTS + _A_LABELS + _D_LABELS + _D_PORTAL + ["--name=myapp", "myimage"]),
 ]
 
 
@@ -110,6 +123,8 @@ _ERROR_CASES = [
     (["+t", "+T", "run", "myimage"], ["mutually exclusive"]),
     (["+T", "+t", "run", "myimage"], ["mutually exclusive"]),
     (["+?", "run", "myimage", "+extra"], ["not supported"]),
+    (["+A", "shell", "mycontainer"], ["not supported"]),
+    (["+D", "helm", "mycontainer"], ["not supported"]),
 ]
 
 
@@ -128,9 +143,10 @@ def test_error(args, expected_substrings):
 
 
 _HELP_CASES = [
-    (["+?", "run", "--help"], ["Podsock", "Available +flags"]),
+    (["+?", "run", "--help"], ["Podsock", "Available +flags", "WARNING"]),
     (["+?", "run", "-h", "myimage"], ["Podsock"]),
     (["+?", "run", "--help", "myimage"], ["Podsock"]),
+    (["+?", "create", "--help"], ["WARNING", "portal"]),
 ]
 
 
@@ -258,6 +274,169 @@ class TestBashCompletionFlags:
         assert "+T" not in out
         assert "+d" not in out
         assert "+w" in out
+
+
+# ---- App ID generation ----
+class TestAppId:
+    def test_simple_name(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._generate_app_id("myapp") == "podsock_myapp"
+
+    def test_hyphen_replaced(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._generate_app_id("my-app") == "podsock_my_app"
+
+    def test_digit_prefix(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._generate_app_id("123app") == "podsock_x123app"
+
+    def test_empty_name(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        app_id = mod._generate_app_id("")
+        assert app_id.startswith("podsock_")
+        assert len(app_id) == len("podsock_") + 8
+
+    def test_long_name_truncated(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        long_name = "a" * 300
+        app_id = mod._generate_app_id(long_name)
+        assert len(app_id) <= 255
+
+
+# ---- Desktop file creation ----
+class TestDesktopFile:
+    def test_create_and_delete(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # Override desktop dir to use tmp_path
+        original_dir = mod._DESKTOP_DIR
+        mod._DESKTOP_DIR = str(tmp_path)
+        try:
+            mod._create_desktop_file("podsock_myapp", "myapp", dryrun=False)
+            path = mod._desktop_file_path("podsock_myapp")
+            assert os.path.exists(path)
+            with open(path, "r", encoding="utf-8") as f:
+                contents = f.read()
+            assert "Podsock Container: myapp" in contents
+            assert "Exec=podsock helm --name=myapp" in contents
+            # Idempotent: second call should not fail
+            mod._create_desktop_file("podsock_myapp", "myapp", dryrun=False)
+            mod._delete_desktop_file("podsock_myapp")
+            assert not os.path.exists(path)
+        finally:
+            mod._DESKTOP_DIR = original_dir
+
+    def test_dryrun_noop(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        original_dir = mod._DESKTOP_DIR
+        mod._DESKTOP_DIR = str(tmp_path)
+        try:
+            mod._create_desktop_file("podsock_myapp", "myapp", dryrun=True)
+            path = mod._desktop_file_path("podsock_myapp")
+            assert not os.path.exists(path)
+        finally:
+            mod._DESKTOP_DIR = original_dir
+
+
+# ---- Portal flag error conditions ----
+class TestPortalErrors:
+    def test_dbus_address_missing(self):
+        env = dict(_ENV)
+        env.pop("DBUS_SESSION_BUS_ADDRESS", None)
+        result = _run(["+D", "run", "--name=myapp", "myimage"], env=env)
+        assert result.returncode != 0
+        combined = result.stdout + "\n" + result.stderr
+        assert "DBUS_SESSION_BUS_ADDRESS" in combined
+
+    def test_dbus_address_not_unix(self):
+        env = dict(_ENV)
+        env["DBUS_SESSION_BUS_ADDRESS"] = "tcp:host=127.0.0.1"
+        result = _run(["+D", "run", "--name=myapp", "myimage"], env=env)
+        assert result.returncode != 0
+        combined = result.stdout + "\n" + result.stderr
+        assert "unix socket" in combined or "not a unix socket" in combined
+
+
+# ---- Utility helpers ----
+class TestHelpers:
+    def test_extract_container_name_equals(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._extract_container_name(["--name=foo", "other"]) == "foo"
+
+    def test_extract_container_name_space(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._extract_container_name(["--name", "foo", "other"]) == "foo"
+
+    def test_extract_container_name_missing(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod._extract_container_name(["run", "myimage"]) is None
+
+    def test_stop_proxy_cleans_socket_dir(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # Override PODSOCK_RTDIR to use tmp_path
+        original_rtdir = mod.PODSOCK_RTDIR
+        mod.PODSOCK_RTDIR = str(tmp_path)
+        try:
+            socket_dir = mod._proxy_socket_dir("myapp")
+            os.makedirs(socket_dir, exist_ok=True)
+            pid_file = os.path.join(socket_dir, "proxy.pid")
+            with open(pid_file, "w") as f:
+                f.write("999999\n")
+            mod._stop_xdg_dbus_proxy("podsock_myapp", "myapp")
+            assert not os.path.exists(socket_dir)
+        finally:
+            mod.PODSOCK_RTDIR = original_rtdir
+
+
+# ---- Bash completion includes A and D ----
+class TestBashCompletionPortalFlags:
+    def test_run_includes_A(self):
+        out = _bash_complete(["podsock", "run", "+"])
+        assert "+A" in out
+
+    def test_run_includes_D(self):
+        out = _bash_complete(["podsock", "run", "+"])
+        assert "+D" in out
+
+    def test_create_includes_D(self):
+        out = _bash_complete(["podsock", "create", "+"])
+        assert "+D" in out
+
+    def test_shell_excludes_D(self):
+        out = _bash_complete(["podsock", "shell", "+"])
+        assert "+D" not in out
 
 
 class TestBashCompletionPodmanDelegation:

@@ -483,9 +483,6 @@ class TestCleanup:
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, "proxy.pid"), "w") as f:
                 f.write("999999\n")
-            with open(os.path.join(d, "proxy.meta"), "w") as f:
-                f.write(f"app_id=podsock_{name}\nname={name}\n")
-
         # Create .desktop files
         desktop_dir = os.path.expanduser("~/.local/share/applications")
         os.makedirs(desktop_dir, exist_ok=True)

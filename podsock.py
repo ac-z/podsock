@@ -397,11 +397,6 @@ def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
     else:
         die("Error: xdg-dbus-proxy failed to create socket")
 
-    # Write identifying metadata for cleanup-dbus
-    meta_path = os.path.join(socket_dir, "proxy.meta")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        f.write(f"app_id={app_id}\nname={name}\n")
-
     return socket_path
 
 

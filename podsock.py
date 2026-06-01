@@ -306,7 +306,8 @@ def _delete_desktop_file(app_id):
 
 
 def _proxy_socket_dir(name):
-    return os.path.join(PODSOCK_RTDIR, "podsock", name)
+    """Return the persistent host directory that holds the proxy socket."""
+    return os.path.expanduser(f"~/.var/podsock/sockets/{name}")
 
 
 def _proxy_socket_path(name):
@@ -399,8 +400,8 @@ def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
     return socket_path
 
 
-def _stop_xdg_dbus_proxy(app_id, name):
-    """Stop the proxy, remove socket directory, and delete .desktop file."""
+def _stop_xdg_dbus_proxy(app_id, name, remove_dir=False):
+    """Stop the proxy, optionally remove socket directory, and delete .desktop file."""
     unit_name = f"app-{app_id}.service"
     try:
         subprocess.run(["systemctl", "--user", "stop", unit_name],
@@ -417,7 +418,12 @@ def _stop_xdg_dbus_proxy(app_id, name):
             os.kill(pid, 15)
         except (ValueError, ProcessLookupError, OSError):
             pass
-    if os.path.isdir(socket_dir):
+    # Remove socket and pid file; keep directory so podman mount stays valid
+    socket_path = _proxy_socket_path(name)
+    for p in (socket_path, pid_path):
+        if os.path.exists(p):
+            os.unlink(p)
+    if remove_dir and os.path.isdir(socket_dir):
         import shutil
         shutil.rmtree(socket_dir, ignore_errors=True)
     _delete_desktop_file(app_id)
@@ -453,11 +459,14 @@ def _extract_container_name(args):
 
 def _portal_flag_args(name, dryrun=False):
     """Return extra podman args for +D (mounts + env)."""
-    socket_path = _proxy_socket_path(name)
+    socket_dir = _proxy_socket_dir(name)
     doc_path = os.path.join(PODSOCK_RTDIR, "doc")
+    # Mount the persistent directory (not the socket file) so that podman
+    # can start the container even when the proxy is not yet running.
+    proxy_mount = f"{PODSOCK_RTDIR}/podsock_proxy"
     args = [
-        f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/bus",
-        f"--volume={socket_path}:{PODSOCK_RTDIR}/bus:ro",
+        f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={proxy_mount}/bus.sock",
+        f"--volume={socket_dir}:{proxy_mount}:ro",
     ]
     # Only bind-mount doc portal if it exists on the host
     if os.path.ismount(doc_path) or os.path.isdir(doc_path):
@@ -753,13 +762,11 @@ def main():
                 cmd.append("--label=podsock.portal=true")
             if not dryrun:
                 _create_desktop_file(app_id, container_name, dryrun=dryrun)
-            if portal and subcommand == "run":
+            if portal:
+                # Start proxy even for 'create' because podman validates bind-mount sources.
                 socket_path = _start_xdg_dbus_proxy(app_id, container_name, dryrun=dryrun)
                 if not dryrun and not os.path.exists(socket_path):
                     die("Error: proxy socket did not appear")
-                cmd.extend(_portal_flag_args(container_name, dryrun=dryrun))
-            elif portal and subcommand == "create":
-                # For create, add mounts/env now but do not start proxy yet
                 cmd.extend(_portal_flag_args(container_name, dryrun=dryrun))
 
         for arg in remaining:
@@ -779,7 +786,7 @@ def main():
             app_id = labels.get("podsock.app_id")
             container_name = labels.get("podsock.name") or container_arg
             if app_id:
-                _stop_xdg_dbus_proxy(app_id, container_name)
+                _stop_xdg_dbus_proxy(app_id, container_name, remove_dir=True)
         cmd.append("rm")
         for arg in remaining:
             if arg == subcommand:

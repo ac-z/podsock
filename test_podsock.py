@@ -58,9 +58,10 @@ def _cmd_from_dryrun(stdout):
 
 _A_LABELS = ["--label=podsock.app_id=podsock_myapp", "--label=podsock.name=myapp"]
 _D_LABELS = ["--label=podsock.portal=true"]
+_PROXY_HOST_DIR = os.path.expanduser("~/.var/podsock/sockets/myapp")
 _D_PORTAL = [
-    f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/bus",
-    f"--volume={PODSOCK_RTDIR}/podsock/myapp/bus.sock:{PODSOCK_RTDIR}/bus:ro",
+    f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/podsock_proxy/bus.sock",
+    f"--volume={_PROXY_HOST_DIR}:{PODSOCK_RTDIR}/podsock_proxy:ro",
     f"--volume={PODSOCK_RTDIR}/doc:{PODSOCK_RTDIR}/doc",
 ]
 
@@ -400,12 +401,11 @@ class TestHelpers:
         spec.loader.exec_module(mod)
         assert mod._extract_container_name(["run", "myimage"]) is None
 
-    def test_stop_proxy_cleans_socket_dir(self, tmp_path):
+    def test_stop_proxy_keeps_dir_by_default(self, tmp_path):
         import importlib.util
         spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        # Override PODSOCK_RTDIR to use tmp_path
         original_rtdir = mod.PODSOCK_RTDIR
         mod.PODSOCK_RTDIR = str(tmp_path)
         try:
@@ -415,6 +415,26 @@ class TestHelpers:
             with open(pid_file, "w") as f:
                 f.write("999999\n")
             mod._stop_xdg_dbus_proxy("podsock_myapp", "myapp")
+            # Directory must survive so podman mount stays valid
+            assert os.path.exists(socket_dir)
+            assert not os.path.exists(pid_file)
+        finally:
+            mod.PODSOCK_RTDIR = original_rtdir
+
+    def test_stop_proxy_removes_dir_when_asked(self, tmp_path):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        original_rtdir = mod.PODSOCK_RTDIR
+        mod.PODSOCK_RTDIR = str(tmp_path)
+        try:
+            socket_dir = mod._proxy_socket_dir("myapp")
+            os.makedirs(socket_dir, exist_ok=True)
+            pid_file = os.path.join(socket_dir, "proxy.pid")
+            with open(pid_file, "w") as f:
+                f.write("999999\n")
+            mod._stop_xdg_dbus_proxy("podsock_myapp", "myapp", remove_dir=True)
             assert not os.path.exists(socket_dir)
         finally:
             mod.PODSOCK_RTDIR = original_rtdir

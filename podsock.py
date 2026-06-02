@@ -558,6 +558,50 @@ def _extract_container_name(args):
     return None
 
 
+def _fuse_mount_fstype(path):
+    """Return the fstype if `path` is a mount point backed by FUSE, else None.
+
+    A FUSE filesystem (such as the xdg-document-portal at $XDG_RUNTIME_DIR/doc)
+    is owned by the user namespace that mounted it. crun pre-opens bind-mount
+    sources with open_tree() in the host and then stats them via /proc/self/fd
+    from inside the container's *new* user namespace; the kernel denies that
+    access for FUSE mounts, which surfaces at `podman start` as:
+
+        crun: cannot stat /proc/self/fd/NN: Permission denied: OCI permission denied
+
+    Such a mount therefore cannot be bind-mounted into a rootless container and
+    must be skipped. (podman create only writes config.json, so the failure only
+    appears later at start, when crun actually performs the mounts.)
+    """
+    real = os.path.realpath(path)
+    try:
+        with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
+            mountinfo = f.read()
+    except OSError:
+        return None
+    return _parse_fuse_fstype(mountinfo, real)
+
+
+def _parse_fuse_fstype(mountinfo, target):
+    """Parse /proc/self/mountinfo text; return fuse fstype if `target` is a FUSE mount."""
+    for line in mountinfo.splitlines():
+        # Format: ... <mount point> ... - <fstype> <source> <super opts>
+        before_sep, sep, after_sep = line.partition(" - ")
+        if not sep:
+            continue
+        left = before_sep.split()
+        if len(left) < 5:
+            continue
+        # mount point is the 5th field; undo octal escapes for special chars.
+        mount_point = left[4].replace("\\040", " ").replace("\\011", "\t")
+        if mount_point != target:
+            continue
+        fields = after_sep.split()
+        if fields and fields[0].startswith("fuse"):
+            return fields[0]
+    return None
+
+
 def _portal_flag_args(name, dryrun=False):
     """Return extra podman args for +D (mounts + env)."""
     socket_dir = _proxy_socket_dir(name)
@@ -569,11 +613,24 @@ def _portal_flag_args(name, dryrun=False):
         f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={proxy_mount}/bus.sock",
         f"--volume={socket_dir}:{proxy_mount}:ro",
     ]
-    # Only bind-mount doc portal if it exists on the host
-    if os.path.ismount(doc_path) or os.path.isdir(doc_path):
+    # The document portal (FileChooser) doc store is optional. Only bind-mount
+    # it when it is a plain, accessible directory. A FUSE mount (the usual case
+    # for xdg-document-portal on a real desktop) cannot be bind-mounted into a
+    # rootless user-namespaced container: crun fails at `podman start` with
+    # "cannot stat /proc/self/fd/NN: Permission denied". Skipping it lets the
+    # container start; portal D-Bus access still works through the proxy.
+    fuse_fstype = _fuse_mount_fstype(doc_path)
+    if fuse_fstype:
+        print(f"WARNING: {doc_path} is a {fuse_fstype} mount and cannot be bind-mounted into",
+              file=sys.stderr)
+        print("         a rootless container; skipping it. The document portal store will be",
+              file=sys.stderr)
+        print("         unavailable, but other portals still work via the D-Bus proxy.",
+              file=sys.stderr)
+    elif os.path.isdir(doc_path) and os.access(doc_path, os.R_OK | os.X_OK):
         args.append(f"--volume={doc_path}:{doc_path}")
     else:
-        print(f"WARNING: {doc_path} not mounted; FileChooser portal may not work",
+        print(f"WARNING: {doc_path} not accessible; FileChooser portal may not work",
               file=sys.stderr)
     return args
 

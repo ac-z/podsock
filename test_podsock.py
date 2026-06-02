@@ -378,6 +378,57 @@ class TestPortalErrors:
         assert "unix socket" in combined or "not a unix socket" in combined
 
 
+# ---- Portal document-store FUSE handling ----
+class TestPortalDocMount:
+    def _load(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_parse_detects_fuse_doc_portal(self):
+        mod = self._load()
+        # Real-world line for the xdg-document-portal on a desktop session.
+        mountinfo = (
+            "30 1 0:24 / /sys rw,nosuid - sysfs sysfs rw\n"
+            "999 998 0:77 / /run/user/1000/doc rw,nosuid,nodev,relatime "
+            "- fuse.portal portal rw,user_id=1000,group_id=1000\n"
+        )
+        assert mod._parse_fuse_fstype(mountinfo, "/run/user/1000/doc") == "fuse.portal"
+
+    def test_parse_plain_dir_not_fuse(self):
+        mod = self._load()
+        mountinfo = "30 1 0:24 / /run/user/1000 rw - tmpfs tmpfs rw\n"
+        # /run/user/1000/doc is not itself a mount point here.
+        assert mod._parse_fuse_fstype(mountinfo, "/run/user/1000/doc") is None
+
+    def test_parse_handles_escaped_spaces(self):
+        mod = self._load()
+        mountinfo = "1 1 0:1 / /run/user/1000/has\\040space rw - fuse.x x rw\n"
+        assert mod._parse_fuse_fstype(mountinfo, "/run/user/1000/has space") == "fuse.x"
+
+    def test_portal_args_skip_fuse_doc_mount(self, tmp_path, monkeypatch):
+        mod = self._load()
+        monkeypatch.setattr(mod, "PODSOCK_RTDIR", str(tmp_path))
+        doc_path = os.path.join(str(tmp_path), "doc")
+        os.makedirs(doc_path, exist_ok=True)
+        monkeypatch.setattr(mod, "_fuse_mount_fstype", lambda p: "fuse.portal")
+        args = mod._portal_flag_args("myapp")
+        assert not any(arg.endswith(f"{doc_path}:{doc_path}") for arg in args)
+        # The proxy socket mount and D-Bus env must still be present.
+        assert any("podsock_proxy" in arg for arg in args)
+
+    def test_portal_args_mount_plain_doc_dir(self, tmp_path, monkeypatch):
+        mod = self._load()
+        monkeypatch.setattr(mod, "PODSOCK_RTDIR", str(tmp_path))
+        doc_path = os.path.join(str(tmp_path), "doc")
+        os.makedirs(doc_path, exist_ok=True)
+        monkeypatch.setattr(mod, "_fuse_mount_fstype", lambda p: None)
+        args = mod._portal_flag_args("myapp")
+        assert f"--volume={doc_path}:{doc_path}" in args
+
+
 # ---- Utility helpers ----
 class TestHelpers:
     def test_extract_container_name_equals(self):

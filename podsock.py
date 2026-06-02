@@ -562,16 +562,27 @@ def _fuse_mount_fstype(path):
     """Return the fstype if `path` is a mount point backed by FUSE, else None.
 
     A FUSE filesystem (such as the xdg-document-portal at $XDG_RUNTIME_DIR/doc)
-    is owned by the user namespace that mounted it. crun pre-opens bind-mount
-    sources with open_tree() in the host and then stats them via /proc/self/fd
-    from inside the container's *new* user namespace; the kernel denies that
-    access for FUSE mounts, which surfaces at `podman start` as:
+    is owned by the user namespace that mounted it. The kernel denies access to
+    FUSE mounts from a *different* user namespace, even when the new namespace
+    is a descendant of the owning one.
+
+    crun (Podman's default OCI runtime) pre-opens bind-mount sources with
+    open_tree() in the host and then stats them via /proc/self/fd from inside
+    the container's new user namespace. FUSE mounts fail that stat, producing:
 
         crun: cannot stat /proc/self/fd/NN: Permission denied: OCI permission denied
 
-    Such a mount therefore cannot be bind-mounted into a rootless container and
-    must be skipped. (podman create only writes config.json, so the failure only
-    appears later at start, when crun actually performs the mounts.)
+    This is not a crun-specific quirk. Any rootless container runtime that
+    creates a new user namespace hits the same kernel restriction. Other
+    podman-based projects (toolbox, distrobox) also cannot make the document
+    store available inside their containers without an upstream fix from either
+    xdg-document-portal (adding the allow_other mount option) or crun (falling
+    back to a different bind-mount strategy for FUSE sources).
+
+    Until either upstream fix lands, such a mount cannot be bind-mounted into a
+    rootless container and must be skipped. (podman create only writes config.json,
+    so the failure only appears later at start, when crun actually performs the
+    mounts.)
     """
     real = os.path.realpath(path)
     try:
@@ -616,9 +627,10 @@ def _portal_flag_args(name, dryrun=False):
     # The document portal (FileChooser) doc store is optional. Only bind-mount
     # it when it is a plain, accessible directory. A FUSE mount (the usual case
     # for xdg-document-portal on a real desktop) cannot be bind-mounted into a
-    # rootless user-namespaced container: crun fails at `podman start` with
-    # "cannot stat /proc/self/fd/NN: Permission denied". Skipping it lets the
-    # container start; portal D-Bus access still works through the proxy.
+    # rootless container because the kernel denies cross-user-namespace access
+    # to FUSE filesystems. This affects all rootless tools (crun, toolbox,
+    # distrobox) and cannot be fixed from podsock's side. Skipping the mount
+    # lets the container start; portal D-Bus access still works through the proxy.
     fuse_fstype = _fuse_mount_fstype(doc_path)
     if fuse_fstype:
         print(f"WARNING: {doc_path} is a {fuse_fstype} mount and cannot be bind-mounted into",

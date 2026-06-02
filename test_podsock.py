@@ -336,7 +336,7 @@ class TestDesktopFile:
             with open(path, "r", encoding="utf-8") as f:
                 contents = f.read()
             assert "Podsock Container: myapp" in contents
-            assert "Exec=podsock helm --name=myapp" in contents
+            assert "Exec=podsock helm myapp" in contents
             assert "Terminal=true" in contents
             assert "Categories=Development;" in contents
             # Idempotent: second call should not fail

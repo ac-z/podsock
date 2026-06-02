@@ -293,7 +293,7 @@ def _create_desktop_file(app_id, container_name, dryrun=False):
     contents = (
         "[Desktop Entry]\n"
         f"Name=Podsock Container: {container_name}\n"
-        f"Exec=podsock helm --name={container_name}\n"
+        f"Exec=podsock helm {container_name}\n"
         "Type=Application\n"
         "Icon=application-x-executable\n"
         "Terminal=true\n"

@@ -296,6 +296,8 @@ def _create_desktop_file(app_id, container_name, dryrun=False):
         f"Exec=podsock helm --name={container_name}\n"
         "Type=Application\n"
         "Icon=application-x-executable\n"
+        "Terminal=true\n"
+        "Categories=Development;\n"
     )
     if dryrun:
         return

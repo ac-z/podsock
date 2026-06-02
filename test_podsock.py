@@ -337,6 +337,8 @@ class TestDesktopFile:
                 contents = f.read()
             assert "Podsock Container: myapp" in contents
             assert "Exec=podsock helm --name=myapp" in contents
+            assert "Terminal=true" in contents
+            assert "Categories=Development;" in contents
             # Idempotent: second call should not fail
             mod._create_desktop_file("podsock_myapp", "myapp", dryrun=False)
             mod._delete_desktop_file("podsock_myapp")

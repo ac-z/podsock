@@ -39,13 +39,15 @@ _FLAG_DESCS = {
     "w": "Wayland display forwarding",
     "s": "SSH agent socket forwarding",
     "g": "GPU/graphics device access",
+    "p": "PipeWire playback-only audio forwarding",
+    "P": "PipeWire full audio forwarding",
     "n": "Host network with extra capabilities",
     "d": "Debug capabilities (ptrace, perfmon)",
     "A": "Register as desktop app (creates .desktop launcher)",
     "D": "Enable XDG Desktop Portal access (implies +A, filtered D-Bus)",
     "?": "Dry run (print command without executing)",
 }
-_ALLOWED_FLAGS = {"run": "tTwsgndAD?", "create": "tTwsgndAD?"}
+_ALLOWED_FLAGS = {"run": "tTwsgpPndAD?", "create": "tTwsgpPndAD?"}
 
 
 def die(msg):
@@ -129,7 +131,7 @@ def print_bash_completion():
     if [[ "$cur" == +* ]]; then
         local avail=""
         case "$subcmd" in
-            run|create) avail="tTwsgndAD?" ;;
+            run|create) avail="tTwsgpPndAD?" ;;
             shell|helm) avail="?" ;;
             *) avail="?" ;;
         esac
@@ -323,6 +325,85 @@ def _proxy_socket_dir(name):
 
 def _proxy_socket_path(name):
     return os.path.join(_proxy_socket_dir(name), "bus.sock")
+
+
+# ---------------------------------------------------------------------------
+# PipeWire playback-only config snippets
+# ---------------------------------------------------------------------------
+
+_PIPEWIRE_PLAYBACK_SOCKET_CONF = """context.modules = [
+    {
+        name = libpipewire-module-protocol-native
+        args = {
+            sockets = [
+                { name = "pipewire-0-playback" }
+            ]
+        }
+    }
+]
+"""
+
+_PIPEWIRE_PLAYBACK_ACCESS_CONF = """context.modules = [
+    {
+        name = libpipewire-module-access
+        args = {
+            access.socket = {
+                pipewire-0 = "default"
+                pipewire-0-manager = "unrestricted"
+                pipewire-0-playback = "restricted"
+            }
+        }
+    }
+]
+"""
+
+_WIREPLUMBER_PLAYBACK_ONLY_CONF = """access.rules = [
+    {
+        matches = [ { pipewire.access = "restricted" } ]
+        actions = {
+            update-props = {
+                permission_manager_name = "playback-only"
+            }
+        }
+    }
+]
+
+access.permission-managers = [
+    {
+        name = "playback-only"
+        default_permissions = "rx"
+        core_permissions = "rwx"
+        rules = [
+            {
+                matches = [ { media.class = "Audio/Sink" } ]
+                permissions = "rwx"
+            }
+            {
+                matches = [ { media.class = "Audio/Source" } ]
+                permissions = "-"
+            }
+        ]
+    }
+]
+"""
+
+
+def _ensure_pipewire_playback_configs():
+    """Write playback-only host-side configs if missing."""
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    pw_dir = os.path.join(xdg, "pipewire", "pipewire.conf.d")
+    wp_dir = os.path.join(xdg, "wireplumber", "wireplumber.conf.d")
+    configs = [
+        (pw_dir, "99-podsock-playback-socket.conf", _PIPEWIRE_PLAYBACK_SOCKET_CONF),
+        (pw_dir, "99-podsock-playback-access.conf", _PIPEWIRE_PLAYBACK_ACCESS_CONF),
+        (wp_dir, "99-podsock-playback-only.conf", _WIREPLUMBER_PLAYBACK_ONLY_CONF),
+    ]
+    for dir_path, filename, contents in configs:
+        os.makedirs(dir_path, exist_ok=True)
+        path = os.path.join(dir_path, filename)
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(contents)
 
 
 def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
@@ -679,6 +760,46 @@ def _expand_flag(char):
             f"--env=WAYLAND_DISPLAY={wl}",
             f"--volume={sock}:{PODSOCK_RTDIR}/{wl}:ro",
         ]
+
+    # Audio forwarding
+    elif char == "p":
+        xdg = os.environ.get("XDG_RUNTIME_DIR")
+        if not xdg:
+            die("Error: XDG_RUNTIME_DIR not set")
+        playback_sock = os.path.join(xdg, "pipewire-0-playback")
+        if not os.path.exists(playback_sock) or not stat.S_ISSOCK(os.stat(playback_sock).st_mode):
+            _ensure_pipewire_playback_configs()
+            die(
+                "Error: PipeWire playback-only socket not found.\n"
+                "Host-side config files were installed. Restart PipeWire to activate:\n"
+                "  systemctl --user restart pipewire wireplumber\n"
+                "Then retry +p."
+            )
+        return [
+            f"--env=PIPEWIRE_REMOTE=pipewire-0-playback",
+            f"--volume={playback_sock}:{PODSOCK_RTDIR}/pipewire-0-playback:ro",
+        ]
+    elif char == "P":
+        xdg = os.environ.get("XDG_RUNTIME_DIR")
+        if not xdg:
+            die("Error: XDG_RUNTIME_DIR not set")
+        pw_sock = os.path.join(xdg, "pipewire-0")
+        pulse_sock = os.path.join(xdg, "pulse", "native")
+        has_pw = os.path.exists(pw_sock) and stat.S_ISSOCK(os.stat(pw_sock).st_mode)
+        has_pulse = os.path.exists(pulse_sock) and stat.S_ISSOCK(os.stat(pulse_sock).st_mode)
+        if not has_pw and not has_pulse:
+            die(
+                f"Error: No audio socket found.\n"
+                f"  Tried PipeWire: {pw_sock}\n"
+                f"  Tried PulseAudio: {pulse_sock}"
+            )
+        args = []
+        if has_pw:
+            args.append(f"--volume={pw_sock}:{PODSOCK_RTDIR}/pipewire-0:ro")
+        if has_pulse:
+            args.append(f"--volume={pulse_sock}:{PODSOCK_RTDIR}/pulse/native:ro")
+            args.append(f"--env=PULSE_SERVER=unix:{PODSOCK_RTDIR}/pulse/native")
+        return args
 
     # SSH forwarding
     elif char == "s":

@@ -19,6 +19,8 @@ podsock helm mycontainer
 | `+w` | Wayland display forwarding | `run`, `create` |
 | `+s` | SSH agent socket forwarding | `run`, `create` |
 | `+g` | GPU/graphics device access (`/dev/dri`) | `run`, `create` |
+| `+p` | PipeWire playback-only audio forwarding | `run`, `create` |
+| `+P` | PipeWire full audio forwarding (playback + capture) | `run`, `create` |
 | `+n` | Host network with extra capabilities | `run`, `create` |
 | `+d` | Debug capabilities (`ptrace`, `perfmon`) | `run`, `create` |
 | `+A` | Register as a desktop app (creates `.desktop` launcher) | `run`, `create` |
@@ -67,6 +69,28 @@ Standard podman options (e.g. `--user`, `--attach`) are passed through, but `+fl
 > [!NOTE]
 > Containers created with `+A` have a `.desktop` launcher that references `podsock helm`, but `podman start` works fine without podsock.
 
+## Audio Forwarding
+
+PipeWire audio forwarding requires a PipeWire host.
+
+- **`+P`** forwards the host audio sockets. It tries PipeWire first, then PulseAudio — whichever is present (or both). The container gets the same audio access as any host application: playback and capture both work. Works on PipeWire-only, PulseAudio-only, and mixed systems.
+
+- **`+p`** forwards a **playback-only** PipeWire socket. Containers cannot access capture (microphone) devices. On first use, podsock auto-installs the required host-side configs under `~/.config/` and prompts you to restart PipeWire:
+
+  ```bash
+  podsock run +p --rm -it myimage
+  # First run: configs are written, then:
+  # Error: PipeWire playback-only socket not found.
+  # Host-side config files were installed. Restart PipeWire to activate:
+  #   systemctl --user restart pipewire wireplumber
+  # Then retry +p.
+  ```
+
+  After restarting PipeWire, `pipewire-0-playback` will exist in `$XDG_RUNTIME_DIR` and `+p` will work transparently.
+
+  > [!NOTE]
+  > `+p` only restricts PipeWire-native clients. PulseAudio clients inside the container will not have audio (the PulseAudio socket is not forwarded), which is a safe default. If you need PulseAudio compatibility, use `+P` instead.
+
 ## Examples
 
 ```bash
@@ -81,6 +105,14 @@ podsock run +s --rm -it myimage
 #       --volume=/run/user/1000/ssh-agent.socket:/run/user/1000/ssh-agent.socket:ro
 #       --tmpfs /run/user/1000:mode=0700,U --security-opt label=disable --userns keep-id
 #       --env=XDG_RUNTIME_DIR=/run/user/1000 --init --rm -it myimage
+
+podsock run +P --rm -it myimage
+# Forwards the host PipeWire socket (and PulseAudio socket if present)
+# so the container can play and record audio.
+
+podsock run +p --rm -it myimage
+# Forwards a playback-only PipeWire socket.
+# Audio playback works; recording is blocked by host-side WirePlumber rules.
 
 podsock run +D --rm -it myimage
 # Runs with a filtered D-Bus proxy for XDG Desktop Portal access
@@ -98,6 +130,9 @@ podsock +? run ubuntu echo hello
 Required:
 * Python 3 (tested with 3.14)
 * Podman
+
+Optional (for `+p`/`+P` audio forwarding):
+* PipeWire (host) — required for audio socket forwarding
 
 Optional (for `+D` portal access):
 * `xdg-dbus-proxy` — required for `+D`

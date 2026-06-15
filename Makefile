@@ -18,18 +18,33 @@ PREFIX ?= $(HOME)/.local
 DESTDIR ?=
 BINDIR = $(PREFIX)/bin
 COMPLETIONDIR = $(PREFIX)/share/bash-completion/completions
+DATADIR = $(PREFIX)/share/podsock
 ALIAS ?=
 
-.PHONY: install uninstall completions test
+CONFIGDIR ?= $(HOME)/.config
+PWSOCKDIR = $(CONFIGDIR)/pipewire/pipewire.conf.d
+WPCONFIGDIR = $(CONFIGDIR)/wireplumber/wireplumber.conf.d
+
+.PHONY: install uninstall uninstall-configs completions test
 
 install: podsock.py
 	@echo "Installing podsock to $(DESTDIR)$(BINDIR)"
 	@mkdir -p $(DESTDIR)$(BINDIR)
 	@install -m 755 podsock.py $(DESTDIR)$(BINDIR)/podsock
+	@echo "Installing podsock configs to $(DESTDIR)$(DATADIR)"
+	@mkdir -p $(DESTDIR)$(DATADIR)
+	@install -m 644 share/*.conf $(DESTDIR)$(DATADIR)/
 	@$(MAKE) completions
 	@echo "Installation complete. podsock is now in $(DESTDIR)$(BINDIR)/podsock"
 
-uninstall:
+uninstall-configs:
+	@echo "Removing podsock PipeWire configs from $(CONFIGDIR)"
+	@rm -f $(PWSOCKDIR)/99-podsock-playback-socket.conf
+	@rm -f $(PWSOCKDIR)/99-podsock-playback-access.conf
+	@rm -f $(WPCONFIGDIR)/99-podsock-playback-only.conf
+	@echo "Config cleanup complete"
+
+uninstall: uninstall-configs
 	@echo "Removing podsock from $(BINDIR)"
 	@rm -f $(DESTDIR)$(BINDIR)/podsock
 	@echo "Removing completions from $(COMPLETIONDIR)"
@@ -38,6 +53,8 @@ uninstall:
 		echo "Removing completion alias $(ALIAS)"; \
 		rm -f $(DESTDIR)$(COMPLETIONDIR)/$(ALIAS); \
 	fi
+	@echo "Removing podsock data files from $(DATADIR)"
+	@rm -rf $(DESTDIR)$(DATADIR)
 	@echo "Uninstall complete"
 
 completions: podsock.py

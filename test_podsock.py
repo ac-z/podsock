@@ -22,6 +22,7 @@ Podsock - podman wrapper with +flags.
 
 import os
 import shlex
+import socket
 import subprocess
 import sys
 
@@ -31,6 +32,8 @@ PODSOCK = os.path.join(os.path.dirname(__file__), "podsock.py")
 _ENV = {
     "PATH": "/tmp/fakebin:" + subprocess.check_output(["bash", "-c", "echo $PATH"]).decode().strip(),
     "TERM": os.environ.get("TERM", "xterm"),
+    "XDG_RUNTIME_DIR": "/tmp",
+    "XDG_CONFIG_HOME": "/tmp/.config",
 }
 PODSOCK_RTDIR = f"/run/user/{os.getuid()}"
 TERM = os.environ.get("TERM", "xterm")
@@ -126,6 +129,8 @@ _ERROR_CASES = [
     (["+?", "run", "myimage", "+extra"], ["not supported"]),
     (["+A", "shell", "mycontainer"], ["not supported"]),
     (["+D", "helm", "mycontainer"], ["not supported"]),
+    (["+p", "run", "myimage"], ["restart pipewire"]),
+    (["+P", "run", "myimage"], ["No audio socket found"]),
 ]
 
 
@@ -141,6 +146,11 @@ def test_error(args, expected_substrings):
     combined = result.stdout + "\n" + result.stderr
     for s in expected_substrings:
         assert s in combined
+    # Clean up auto-installed PipeWire configs from +p error test
+    if "+p" in args:
+        import shutil
+        shutil.rmtree("/tmp/.config/pipewire", ignore_errors=True)
+        shutil.rmtree("/tmp/.config/wireplumber", ignore_errors=True)
 
 
 _HELP_CASES = [
@@ -163,6 +173,82 @@ def test_help(args, expected_substrings):
     combined = result.stdout + "\n" + result.stderr
     for s in expected_substrings:
         assert s in combined
+
+
+# ---- Audio forwarding ----
+def test_pipewire_playback_forwarding():
+    tmpdir = os.path.join("/tmp", f"podsock_test_{os.getpid()}_playback")
+    os.makedirs(tmpdir, exist_ok=True)
+    sock_path = os.path.join(tmpdir, "pipewire-0-playback")
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(sock_path)
+        s.close()
+        env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
+        result = _run(["+?p", "run", "myimage"], env=env)
+        assert result.returncode == 0, result.stderr
+        cmd = _cmd_from_dryrun(result.stdout)
+        assert f"--env=PIPEWIRE_REMOTE=pipewire-0-playback" in cmd
+        assert f"--volume={sock_path}:{PODSOCK_RTDIR}/pipewire-0-playback:ro" in cmd
+    finally:
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+        os.rmdir(tmpdir)
+
+
+def test_pipewire_full_forwarding():
+    tmpdir = os.path.join("/tmp", f"podsock_test_{os.getpid()}_full")
+    os.makedirs(tmpdir, exist_ok=True)
+    pw_sock = os.path.join(tmpdir, "pipewire-0")
+    pulse_dir = os.path.join(tmpdir, "pulse")
+    pulse_sock = os.path.join(pulse_dir, "native")
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(pw_sock)
+        s.close()
+        os.makedirs(pulse_dir, exist_ok=True)
+        s2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s2.bind(pulse_sock)
+        s2.close()
+        env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
+        result = _run(["+?P", "run", "myimage"], env=env)
+        assert result.returncode == 0, result.stderr
+        cmd = _cmd_from_dryrun(result.stdout)
+        assert f"--volume={pw_sock}:{PODSOCK_RTDIR}/pipewire-0:ro" in cmd
+        assert f"--volume={pulse_sock}:{PODSOCK_RTDIR}/pulse/native:ro" in cmd
+    finally:
+        for p in (pulse_sock, pw_sock):
+            if os.path.exists(p):
+                os.unlink(p)
+        if os.path.isdir(pulse_dir):
+            os.rmdir(pulse_dir)
+        os.rmdir(tmpdir)
+
+
+def test_pulse_only_forwarding():
+    tmpdir = os.path.join("/tmp", f"podsock_test_{os.getpid()}_pulse")
+    os.makedirs(tmpdir, exist_ok=True)
+    pulse_dir = os.path.join(tmpdir, "pulse")
+    pulse_sock = os.path.join(pulse_dir, "native")
+    try:
+        os.makedirs(pulse_dir, exist_ok=True)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(pulse_sock)
+        s.close()
+        env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
+        result = _run(["+?P", "run", "myimage"], env=env)
+        assert result.returncode == 0, result.stderr
+        cmd = _cmd_from_dryrun(result.stdout)
+        assert f"--volume={pulse_sock}:{PODSOCK_RTDIR}/pulse/native:ro" in cmd
+        assert f"--env=PULSE_SERVER=unix:{PODSOCK_RTDIR}/pulse/native" in cmd
+        # PipeWire socket should NOT be forwarded when only Pulse is present
+        assert f"--volume={tmpdir}/pipewire-0" not in " ".join(cmd)
+    finally:
+        if os.path.exists(pulse_sock):
+            os.unlink(pulse_sock)
+        if os.path.isdir(pulse_dir):
+            os.rmdir(pulse_dir)
+        os.rmdir(tmpdir)
 
 
 # ---- Bash completion output ----
@@ -657,6 +743,22 @@ class TestBashCompletionPortalFlags:
     def test_shell_excludes_D(self):
         out = _bash_complete(["podsock", "shell", "+"])
         assert "+D" not in out
+
+    def test_run_includes_p(self):
+        out = _bash_complete(["podsock", "run", "+"])
+        assert "+p" in out
+
+    def test_run_includes_P(self):
+        out = _bash_complete(["podsock", "run", "+"])
+        assert "+P" in out
+
+    def test_create_includes_p(self):
+        out = _bash_complete(["podsock", "create", "+"])
+        assert "+p" in out
+
+    def test_shell_excludes_p(self):
+        out = _bash_complete(["podsock", "shell", "+"])
+        assert "+p" not in out
 
 
 class TestBashCompletionPodmanDelegation:

@@ -25,7 +25,7 @@ CONFIGDIR ?= $(HOME)/.config
 PWSOCKDIR = $(CONFIGDIR)/pipewire/pipewire.conf.d
 WPCONFIGDIR = $(CONFIGDIR)/wireplumber/wireplumber.conf.d
 
-.PHONY: install uninstall uninstall-configs completions test
+.PHONY: install uninstall uninstall-configs completions test check
 
 install: podsock.py
 	@echo "Installing podsock to $(DESTDIR)$(BINDIR)"
@@ -69,3 +69,5 @@ completions: podsock.py
 test:
 	@which pytest > /dev/null 2>&1 || { echo "pytest is required to run tests. Install it (e.g. apt install python3-pytest) and try again."; exit 1; }
 	@pytest test_podsock.py -v
+
+check: test

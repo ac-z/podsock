@@ -54,6 +54,12 @@ def _run(args, env=None):
     )
 
 
+def _cleanup_pipewire_configs():
+    import shutil
+    shutil.rmtree("/tmp/.config/pipewire", ignore_errors=True)
+    shutil.rmtree("/tmp/.config/wireplumber", ignore_errors=True)
+
+
 def _cmd_from_dryrun(stdout):
     line = stdout.strip()
     return shlex.split(line) if line else []
@@ -142,15 +148,15 @@ _ERROR_CASES = [
 )
 def test_error(args, expected_substrings):
     result = _run(args)
-    assert result.returncode != 0
-    combined = result.stdout + "\n" + result.stderr
-    for s in expected_substrings:
-        assert s in combined
-    # Clean up auto-installed PipeWire configs from +p error test
-    if "+p" in args:
-        import shutil
-        shutil.rmtree("/tmp/.config/pipewire", ignore_errors=True)
-        shutil.rmtree("/tmp/.config/wireplumber", ignore_errors=True)
+    try:
+        assert result.returncode != 0
+        combined = result.stdout + "\n" + result.stderr
+        for s in expected_substrings:
+            assert s in combined
+    finally:
+        # Clean up auto-installed PipeWire configs from +p error test
+        if "+p" in args:
+            _cleanup_pipewire_configs()
 
 
 _HELP_CASES = [
@@ -182,8 +188,10 @@ def test_pipewire_playback_forwarding():
     sock_path = os.path.join(tmpdir, "pipewire-0-playback")
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.bind(sock_path)
-        s.close()
+        try:
+            s.bind(sock_path)
+        finally:
+            s.close()
         env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
         result = _run(["+?p", "run", "myimage"], env=env)
         assert result.returncode == 0, result.stderr
@@ -204,12 +212,16 @@ def test_pipewire_full_forwarding():
     pulse_sock = os.path.join(pulse_dir, "native")
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.bind(pw_sock)
-        s.close()
+        try:
+            s.bind(pw_sock)
+        finally:
+            s.close()
         os.makedirs(pulse_dir, exist_ok=True)
         s2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s2.bind(pulse_sock)
-        s2.close()
+        try:
+            s2.bind(pulse_sock)
+        finally:
+            s2.close()
         env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
         result = _run(["+?P", "run", "myimage"], env=env)
         assert result.returncode == 0, result.stderr
@@ -233,8 +245,10 @@ def test_pulse_only_forwarding():
     try:
         os.makedirs(pulse_dir, exist_ok=True)
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.bind(pulse_sock)
-        s.close()
+        try:
+            s.bind(pulse_sock)
+        finally:
+            s.close()
         env = {**_ENV, "XDG_RUNTIME_DIR": tmpdir}
         result = _run(["+?P", "run", "myimage"], env=env)
         assert result.returncode == 0, result.stderr

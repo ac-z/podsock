@@ -20,9 +20,11 @@
 Podsock - podman wrapper with +flags.
 """
 
+import json
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -318,9 +320,17 @@ def _delete_desktop_file(app_id):
         os.unlink(path)
 
 
+def _podsock_var_dir():
+    """Return the base podsock var directory, creating it with 0o700 if needed."""
+    path = os.path.expanduser("~/.var/podsock")
+    if not os.path.isdir(path):
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
+
+
 def _proxy_socket_dir(name):
     """Return the persistent host directory that holds the proxy socket."""
-    return os.path.expanduser(f"~/.var/podsock/sockets/{name}")
+    return os.path.join(_podsock_var_dir(), "sockets", name)
 
 
 def _proxy_socket_path(name):
@@ -328,64 +338,48 @@ def _proxy_socket_path(name):
 
 
 # ---------------------------------------------------------------------------
-# PipeWire playback-only config snippets
+# Data file helpers
 # ---------------------------------------------------------------------------
 
-_PIPEWIRE_PLAYBACK_SOCKET_CONF = """context.modules = [
-    {
-        name = libpipewire-module-protocol-native
-        args = {
-            sockets = [
-                { name = "pipewire-0-playback" }
-            ]
-        }
-    }
-]
-"""
+def _read_data_file(filename):
+    """Read a podsock data file from standard locations."""
+    # 1. Explicit override
+    env_dir = os.environ.get("PODSOCK_DATADIR")
+    if env_dir:
+        path = os.path.join(env_dir, filename)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
 
-_PIPEWIRE_PLAYBACK_ACCESS_CONF = """context.modules = [
-    {
-        name = libpipewire-module-access
-        args = {
-            access.socket = {
-                pipewire-0 = "default"
-                pipewire-0-manager = "unrestricted"
-                pipewire-0-playback = "restricted"
-            }
-        }
-    }
-]
-"""
+    # 2. Development: relative to this script
+    dev_path = os.path.join(os.path.dirname(__file__), "share", filename)
+    if os.path.exists(dev_path):
+        with open(dev_path, "r", encoding="utf-8") as f:
+            return f.read()
 
-_WIREPLUMBER_PLAYBACK_ONLY_CONF = """access.rules = [
-    {
-        matches = [ { pipewire.access = "restricted" } ]
-        actions = {
-            update-props = {
-                permission_manager_name = "playback-only"
-            }
-        }
-    }
-]
+    # 3. Installed: relative to the running binary (standard prefix layout)
+    bin_path = os.path.realpath(sys.argv[0])
+    if os.path.isfile(bin_path):
+        installed_path = os.path.join(os.path.dirname(bin_path), "..", "share", "podsock", filename)
+        installed_path = os.path.normpath(installed_path)
+        if os.path.exists(installed_path):
+            with open(installed_path, "r", encoding="utf-8") as f:
+                return f.read()
 
-access.permission-managers = [
-    {
-        name = "playback-only"
-        default_permissions = "rx"
-        core_permissions = "rwx"
-        rules = [
-            {
-                matches = [ { media.class = "Audio/Sink" } ]
-                permissions = "rwx"
-            }
-            {
-                matches = [ { media.class = "Audio/Source" } ]
-                permissions = "-"
-            }
-        ]
-    }
-]
-"""
+    # 4. Standard FHS data directories
+    for prefix in ("/usr/local", "/usr"):
+        path = os.path.join(prefix, "share", "podsock", filename)
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+
+    # 5. User-local
+    path = os.path.join(os.path.expanduser("~/.local"), "share", "podsock", filename)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    die(f"Error: podsock data file not found: {filename}")
 
 
 def _ensure_pipewire_playback_configs():
@@ -394,14 +388,15 @@ def _ensure_pipewire_playback_configs():
     pw_dir = os.path.join(xdg, "pipewire", "pipewire.conf.d")
     wp_dir = os.path.join(xdg, "wireplumber", "wireplumber.conf.d")
     configs = [
-        (pw_dir, "99-podsock-playback-socket.conf", _PIPEWIRE_PLAYBACK_SOCKET_CONF),
-        (pw_dir, "99-podsock-playback-access.conf", _PIPEWIRE_PLAYBACK_ACCESS_CONF),
-        (wp_dir, "99-podsock-playback-only.conf", _WIREPLUMBER_PLAYBACK_ONLY_CONF),
+        (pw_dir, "99-podsock-playback-socket.conf", "pipewire-playback-socket.conf"),
+        (pw_dir, "99-podsock-playback-access.conf", "pipewire-playback-access.conf"),
+        (wp_dir, "99-podsock-playback-only.conf", "wireplumber-playback-only.conf"),
     ]
-    for dir_path, filename, contents in configs:
+    for dir_path, dest_name, src_name in configs:
         os.makedirs(dir_path, exist_ok=True)
-        path = os.path.join(dir_path, filename)
+        path = os.path.join(dir_path, dest_name)
         if not os.path.exists(path):
+            contents = _read_data_file(src_name)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(contents)
 
@@ -428,9 +423,12 @@ def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
         die("Error: DBUS_SESSION_BUS_ADDRESS is not a unix socket (required for +D)")
 
     proxy_bin = "xdg-dbus-proxy"
-    # Verify xdg-dbus-proxy is in PATH
-    if not any(os.path.isfile(os.path.join(p, proxy_bin)) for p in os.environ.get("PATH", "").split(":")):
-        die(f"Error: {proxy_bin} not found in PATH (required for +D)")
+    # Verify xdg-dbus-proxy is in PATH and executable
+    if not any(
+        os.path.isfile(os.path.join(p, proxy_bin)) and os.access(os.path.join(p, proxy_bin), os.X_OK)
+        for p in os.environ.get("PATH", "").split(":")
+    ):
+        die(f"Error: {proxy_bin} not found in PATH or not executable (required for +D)")
 
     # Arguments: ADDRESS PATH --filter --talk=... --talk=...
     proxy_args = [
@@ -494,8 +492,6 @@ def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
 
 def _cleanup_dbus():
     """Clean up stale D-Bus proxies and .desktop files for stopped containers."""
-    import json
-
     # Get all containers with podsock labels
     try:
         out = subprocess.run(
@@ -541,7 +537,6 @@ def _cleanup_dbus():
             if not os.path.isdir(path):
                 continue
             if entry not in known_names:
-                import shutil
                 shutil.rmtree(path, ignore_errors=True)
                 cleaned += 1
                 print(f"Cleaned up orphan proxy directory for {entry}")
@@ -608,7 +603,6 @@ def _stop_xdg_dbus_proxy(app_id, name, remove_dir=False):
         if os.path.exists(p):
             os.unlink(p)
     if remove_dir and os.path.isdir(socket_dir):
-        import shutil
         shutil.rmtree(socket_dir, ignore_errors=True)
         _delete_desktop_file(app_id)
 
@@ -622,7 +616,6 @@ def _podman_inspect_labels(name_or_id):
         )
         if out.returncode != 0:
             return {}
-        import json
         data = json.loads(out.stdout)
         if isinstance(data, list) and data:
             return data[0].get("Config", {}).get("Labels") or {}
@@ -992,7 +985,7 @@ def main():
                 "--interactive", "--tty", "--privileged", "--latest",
                 "--detach", "--env-host", "--init"
             ]),
-            frozenset("euw"),
+            frozenset("euwp"),
         )
         if container_idx == -1:
             die(f"Usage: {sys.argv[0]} shell <container> [command]")

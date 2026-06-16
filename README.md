@@ -128,7 +128,7 @@ podsock +? run ubuntu echo hello
 ### Dependencies
 
 Required:
-* Python 3 (tested with 3.14)
+* Python 3 (tested with 3.12+)
 * Podman
 
 Optional (for `+p`/`+P` audio forwarding):

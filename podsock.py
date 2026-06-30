@@ -47,9 +47,10 @@ _FLAG_DESCS = {
     "d": "Debug capabilities (ptrace, perfmon)",
     "A": "Register as desktop app (creates .desktop launcher)",
     "D": "Enable XDG Desktop Portal access (implies +A, filtered D-Bus)",
+    "f": "FUSE filesystem support (e.g. sshfs)",
     "?": "Dry run (print command without executing)",
 }
-_ALLOWED_FLAGS = {"run": "tTwsgpPndAD?", "create": "tTwsgpPndAD?"}
+_ALLOWED_FLAGS = {"run": "tTwsgpPndADf?", "create": "tTwsgpPndADf?"}
 
 
 def die(msg):
@@ -133,7 +134,7 @@ def print_bash_completion():
     if [[ "$cur" == +* ]]; then
         local avail=""
         case "$subcmd" in
-            run|create) avail="tTwsgpPndAD?" ;;
+            run|create) avail="tTwsgpPndADf?" ;;
             shell|helm) avail="?" ;;
             *) avail="?" ;;
         esac
@@ -388,14 +389,14 @@ def _ensure_pipewire_playback_configs():
     pw_dir = os.path.join(xdg, "pipewire", "pipewire.conf.d")
     wp_dir = os.path.join(xdg, "wireplumber", "wireplumber.conf.d")
     configs = [
-        (pw_dir, "99-podsock-playback-socket.conf", "pipewire-playback-socket.conf"),
-        (pw_dir, "99-podsock-playback-access.conf", "pipewire-playback-access.conf"),
+        (pw_dir, "99-podsock-playback.conf", "pipewire-playback.conf"),
         (wp_dir, "99-podsock-playback-only.conf", "wireplumber-playback-only.conf"),
     ]
     for dir_path, dest_name, src_name in configs:
         os.makedirs(dir_path, exist_ok=True)
         path = os.path.join(dir_path, dest_name)
         if not os.path.exists(path):
+            print(f"Installing {src_name} to {path}", file=sys.stderr)
             contents = _read_data_file(src_name)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(contents)
@@ -822,6 +823,12 @@ def _expand_flag(char):
             "--cap-add=SYS_PTRACE,PERFMON",
             "--security-opt", "seccomp=unconfined",
         ]
+
+    elif char == "f":
+        if not os.path.exists("/dev/fuse"):
+            die("Error: /dev/fuse not found. Load the fuse kernel module:\n"
+                "  sudo modprobe fuse")
+        return ["--device", "/dev/fuse", "--cap-add=SYS_ADMIN"]
 
     # App registration / portal access (handled in main(), not here)
     elif char in ("A", "D"):

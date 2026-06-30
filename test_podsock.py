@@ -44,6 +44,7 @@ _T = ["--interactive", "--tty", f"--env=TERM={TERM}"]
 _TT = ["--interactive", "--tty", "--env=TERM=xterm-256color"]
 _N = ["--network=host", "--cap-add=NET_RAW,NET_ADMIN,NET_BIND_SERVICE"]
 _D = ["--cap-add=SYS_PTRACE,PERFMON", "--security-opt", "seccomp=unconfined"]
+_F = ["--device", "/dev/fuse", "--cap-add=SYS_ADMIN"]
 
 
 def _run(args, env=None):
@@ -113,6 +114,12 @@ _DRYRUN_CASES = [
     (["+?D", "create", "--name=myapp", "myimage"], ["podman", "create"] + _CREATE_OPTS + _A_LABELS + _D_LABELS + _D_PORTAL + ["--name=myapp", "myimage"]),
 ]
 
+_FUSE_DRYRUN_CASES = [
+    (["+?f", "run", "myimage"], ["podman", "run"] + _F + _RUN_OPTS + ["myimage"]),
+    (["+?f", "create", "myimage"], ["podman", "create"] + _F + _CREATE_OPTS + ["myimage"]),
+    (["+?Tf", "run", "myimage"], ["podman", "run"] + _TT + _F + _RUN_OPTS + ["myimage"]),
+]
+
 
 # ---- Dry-run exact assertions ----
 @pytest.mark.parametrize(
@@ -121,6 +128,18 @@ _DRYRUN_CASES = [
     ids=[" ".join(c[0]) for c in _DRYRUN_CASES],
 )
 def test_dryrun(args, expected):
+    result = _run(args)
+    assert result.returncode == 0, result.stderr
+    assert _cmd_from_dryrun(result.stdout) == expected
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/fuse"), reason="no /dev/fuse on this host")
+@pytest.mark.parametrize(
+    "args,expected",
+    _FUSE_DRYRUN_CASES,
+    ids=[" ".join(c[0]) for c in _FUSE_DRYRUN_CASES],
+)
+def test_dryrun_fuse(args, expected):
     result = _run(args)
     assert result.returncode == 0, result.stderr
     assert _cmd_from_dryrun(result.stdout) == expected
@@ -773,6 +792,18 @@ class TestBashCompletionPortalFlags:
     def test_shell_excludes_p(self):
         out = _bash_complete(["podsock", "shell", "+"])
         assert "+p" not in out
+
+    def test_run_includes_f(self):
+        out = _bash_complete(["podsock", "run", "+"])
+        assert "+f" in out
+
+    def test_create_includes_f(self):
+        out = _bash_complete(["podsock", "create", "+"])
+        assert "+f" in out
+
+    def test_shell_excludes_f(self):
+        out = _bash_complete(["podsock", "shell", "+"])
+        assert "+f" not in out
 
 
 class TestBashCompletionPodmanDelegation:

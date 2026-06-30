@@ -39,8 +39,7 @@ install: podsock.py
 
 uninstall-configs:
 	@echo "Removing podsock PipeWire configs from $(CONFIGDIR)"
-	@rm -f $(PWSOCKDIR)/99-podsock-playback-socket.conf
-	@rm -f $(PWSOCKDIR)/99-podsock-playback-access.conf
+	@rm -f $(PWSOCKDIR)/99-podsock-playback.conf
 	@rm -f $(WPCONFIGDIR)/99-podsock-playback-only.conf
 	@echo "Config cleanup complete"
 

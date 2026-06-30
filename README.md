@@ -25,6 +25,7 @@ podsock helm mycontainer
 | `+d` | Debug capabilities (`ptrace`, `perfmon`) | `run`, `create` |
 | `+A` | Register as a desktop app (creates `.desktop` launcher) | `run`, `create` |
 | `+D` | Enable XDG Desktop Portal access (filtered D-Bus, implies `+A`) | `run`, `create` |
+| `+f` | FUSE filesystem support (e.g. sshfs) | `run`, `create` |
 | `+?` | Dry run (print the podman command without executing) | all |
 
 Flags can be chained: `+Tdn` gives you terminal, debug, and network.
@@ -68,6 +69,12 @@ Standard podman options (e.g. `--user`, `--attach`) are passed through, but `+fl
 
 > [!NOTE]
 > Containers created with `+A` have a `.desktop` launcher that references `podsock helm`, but `podman start` works fine without podsock.
+
+> [!WARNING]
+> `+f` grants `CAP_SYS_ADMIN`, one of the most powerful Linux capabilities. In addition to FUSE mounts, `SYS_ADMIN` enables a broad range of privileged operations (mount/umount, namespace manipulation, various sysadmin actions). Only use `+f` with trusted container images.
+
+> [!NOTE]
+> **`+f` prerequisites:** The `fuse` kernel module must be loaded on the host (`/dev/fuse` must exist). On modern systemd distros (Fedora, Ubuntu, Debian, Arch), `/dev/fuse` is world-readable/writable by default via udev rules — no group membership needed. The container image must have `fusermount`/`fusermount3` and the desired FUSE filesystem tool (e.g., `sshfs`) installed. If `/dev/fuse` is not world-accessible on your system, you may need `--group-add keep-groups` (crun only).
 
 ## Audio Forwarding
 
@@ -117,6 +124,11 @@ podsock run +p --rm -it myimage
 podsock run +D --rm -it myimage
 # Runs with a filtered D-Bus proxy for XDG Desktop Portal access
 # (file chooser, notifications, screen sharing, etc.)
+
+podsock run +Tfs --rm -it myimage
+# Terminal + FUSE support + SSH agent forwarding
+# Inside the container:
+#   sshfs user@host:/path /mnt/remote
 
 podsock +? run ubuntu echo hello
 # Prints: podman run --tmpfs /run/user/1000:mode=0700,U --security-opt label=disable

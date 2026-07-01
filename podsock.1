@@ -1,0 +1,285 @@
+.TH PODSOCK 1 "2026-07-01" "podsock 0.1.0" "User Commands"
+.SH NAME
+podsock \- podman wrapper with shorthand +flags for host integration
+.SH SYNOPSIS
+.B podsock
+[+\fIflags\fR] \fIcommand\fR [\fIargs...\fR]
+.br
+.B podsock
+help [\fIcommand\fR]
+.br
+.B podsock
+\fB--version\fR
+.SH DESCRIPTION
+Podsock is a wrapper around
+.BR podman (1)
+that adds convenient shorthand flags (e.g.,
+.BR +t ,
+.BR +w ,
+.BR +D )
+for common host-integration patterns: terminal interactivity, Wayland display
+forwarding, SSH agent forwarding, GPU access, audio forwarding, network
+capabilities, debug capabilities, FUSE support, desktop app registration, and
+XDG Desktop Portal access.
+.PP
+Podsock does not hide the underlying podman CLI. All standard podman subcommands
+and options pass through unchanged. The wrapper only intercepts
+.B +flags
+(prefixed with
+.BR + )
+and the
+.BR shell ,
+.BR helm ,
+and
+.BR cleanup
+subcommands.
+.SH +FLAGS
+Flags are prefixed with
+.B +
+and can be chained:
+.B +Tdn
+gives terminal, debug, and network.
+.TP
+.B +t
+Terminal interactivity (uses
+.BR $TERM )
+.TP
+.B +T
+Terminal interactivity (forces
+.BR xterm-256color )
+.TP
+.B +w
+Wayland display forwarding
+.TP
+.B +s
+SSH agent socket forwarding
+.TP
+.B +g
+GPU/graphics device access (
+.BR /dev/dri )
+.TP
+.B +p
+PipeWire playback-only audio forwarding
+.TP
+.B +P
+PipeWire full audio forwarding (playback + capture)
+.TP
+.B +n
+Host network with extra capabilities
+.TP
+.B +d
+Debug capabilities (ptrace, perfmon)
+.TP
+.B +A
+Register as desktop app (creates
+.B .desktop
+launcher)
+.TP
+.B +D
+Enable XDG Desktop Portal access (implies
+.BR +A ,
+filtered D-Bus)
+.TP
+.B +f
+FUSE filesystem support (e.g., sshfs)
+.TP
+.B +?
+Dry run (print the podman command without executing)
+.PP
+The
+.B +t
+and
+.B +T
+flags are mutually exclusive.
+.B +t ,
+.BR +T ,
+.BR +w ,
+.BR +s ,
+.BR +g ,
+.BR +p ,
+.BR +P ,
+.BR +n ,
+.BR +d ,
+.BR +A ,
+.BR +D ,
+and
+.B +f
+are only supported with the
+.B run
+and
+.B create
+subcommands.
+.B +?
+is supported with all subcommands.
+.SH SUBCOMMANDS
+In addition to all standard podman subcommands, podsock provides:
+.TP
+.B shell <container> [command]
+Run an interactive shell (or command) in a running container via
+.BR "podman exec" .
+Defaults to
+.B bash
+if no command is given.
+.TP
+.B helm <container>
+Start an existing container interactively via
+.BR "podman start" .
+If the container was created with
+.B +A
+or
+.BR +D ,
+ensures the
+.B .desktop
+file and D-Bus proxy are ready.
+.TP
+.B cleanup
+Clean up stale D-Bus proxies and
+.B .desktop
+files for deleted containers. Running containers are left untouched. Stopped
+containers have their proxy stopped. Fully removed (orphan) containers have
+both their proxy directories and
+.B .desktop
+files cleaned up.
+.SH EXAMPLES
+.TP
+.B podsock run +Twg --rm -it ubuntu bash
+Run an Ubuntu container with terminal, Wayland, and GPU access.
+.TP
+.B podsock run +p --rm -it myimage
+Run with playback-only PipeWire audio forwarding.
+.TP
+.B podsock run +D --name=myapp myimage
+Run with XDG Desktop Portal access and desktop app registration.
+.TP
+.B podsock run +Tfs --rm -it myimage
+Run with terminal, FUSE support, and SSH agent forwarding.
+.TP
+.B podsock +? run +Tngd myimage
+Dry run: print the equivalent podman command without executing.
+.TP
+.B podsock shell mycontainer
+Open a bash shell in a running container.
+.TP
+.B podsock shell mycontainer python
+Run python in a running container.
+.TP
+.B podsock helm mycontainer
+Start a container interactively.
+.TP
+.B podsock cleanup
+Clean up stale D-Bus proxies and orphaned .desktop files.
+.SH ENVIRONMENT
+.TP
+.B PODSOCK_INIT
+Set to
+.B 0
+to disable the
+.B --init
+flag that podsock adds by default. Default:
+.BR 1 .
+.TP
+.B PODSOCK_RTDIR
+Override the runtime directory used for socket paths. Default:
+.BR /run/user/<uid> .
+.TP
+.B PODSOCK_DRYRUN
+Set to
+.B 1
+to force dry-run mode (equivalent to
+.BR +? ).
+.TP
+.B PODSOCK_DATADIR
+Override the directory where podsock looks for data files (PipeWire configs).
+.TP
+.B TERM
+Used by
+.B +t
+for the container's
+.B $TERM
+environment variable.
+.TP
+.B WAYLAND_DISPLAY
+Used by
+.B +w
+for Wayland socket forwarding.
+.TP
+.B XDG_RUNTIME_DIR
+Used by
+.BR +w ,
+.BR +p ,
+.B +P
+for socket paths.
+.TP
+.B SSH_AUTH_SOCK
+Used by
+.B +s
+for SSH agent forwarding.
+.TP
+.B DBUS_SESSION_BUS_ADDRESS
+Used by
+.B +D
+for the D-Bus proxy. Must be a
+.B unix:
+address.
+.SH FILES
+.TP
+.B ~/.var/podsock/sockets/
+Persistent proxy socket directories for
+.B +D
+containers.
+.TP
+.B ~/.local/share/applications/podsock_*.desktop
+Desktop launchers created by
+.B +A
+and
+.BR +D .
+.TP
+.B ~/.config/pipewire/pipewire.conf.d/99-podsock-playback.conf
+PipeWire config auto-installed by
+.B +p
+on first use.
+.TP
+.B ~/.config/wireplumber/wireplumber.conf.d/99-podsock-playback-only.conf
+WirePlumber config auto-installed by
+.B +p
+on first use.
+.SH WARNINGS
+Podsock always disables SELinux labeling
+.RB ( --security-opt\ label=disable )
+and shares the host user's UID and username with the container
+.RB ( --userns\ keep-id ).
+.PP
+.B +D
+does NOT filter individual portal interfaces. Access control is delegated to
+the desktop environment's permission dialogs. Treat untrusted apps with
+.B +D
+with the same caution as a Flatpak with full portal access.
+.PP
+.B +f
+grants
+.BR CAP_SYS_ADMIN ,
+one of the most powerful Linux capabilities. In addition to FUSE mounts,
+SYS_ADMIN enables a broad range of privileged operations (mount/umount,
+namespace manipulation, various sysadmin actions). Only use
+.B +f
+with trusted container images.
+.SH "SEE ALSO"
+.BR podman (1),
+.BR podman-run (1),
+.BR podman-exec (1),
+.BR podman-start (1),
+.BR xdg-dbus-proxy (1),
+.BR pipewire (1)
+.SH BUGS
+See
+.B KNOWN_ISSUES.md
+in the source repository for known limitations, including the FUSE document
+portal issue that affects
+.B +D
+on systems where
+.I /run/user/<uid>/doc
+is a FUSE mount.
+.SH AUTHOR
+Amber Connelly
+.SH LICENSE
+GPLv3

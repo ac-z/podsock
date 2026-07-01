@@ -19,21 +19,25 @@ DESTDIR ?=
 BINDIR = $(PREFIX)/bin
 COMPLETIONDIR = $(PREFIX)/share/bash-completion/completions
 DATADIR = $(PREFIX)/share/podsock
+MANDIR = $(PREFIX)/share/man/man1
 ALIAS ?=
 
 CONFIGDIR ?= $(HOME)/.config
 PWSOCKDIR = $(CONFIGDIR)/pipewire/pipewire.conf.d
 WPCONFIGDIR = $(CONFIGDIR)/wireplumber/wireplumber.conf.d
 
-.PHONY: install uninstall uninstall-configs completions test check
+.PHONY: install uninstall uninstall-configs completions test check clean
 
-install: podsock.py
+install: podsock.py podsock.1
 	@echo "Installing podsock to $(DESTDIR)$(BINDIR)"
 	@mkdir -p $(DESTDIR)$(BINDIR)
 	@install -m 755 podsock.py $(DESTDIR)$(BINDIR)/podsock
 	@echo "Installing podsock configs to $(DESTDIR)$(DATADIR)"
 	@mkdir -p $(DESTDIR)$(DATADIR)
 	@install -m 644 share/*.conf $(DESTDIR)$(DATADIR)/
+	@echo "Installing man page to $(DESTDIR)$(MANDIR)"
+	@mkdir -p $(DESTDIR)$(MANDIR)
+	@install -m 644 podsock.1 $(DESTDIR)$(MANDIR)/
 	@$(MAKE) completions
 	@echo "Installation complete. podsock is now in $(DESTDIR)$(BINDIR)/podsock"
 
@@ -54,6 +58,8 @@ uninstall: uninstall-configs
 	fi
 	@echo "Removing podsock data files from $(DATADIR)"
 	@rm -rf $(DESTDIR)$(DATADIR)
+	@echo "Removing man page from $(MANDIR)"
+	@rm -f $(DESTDIR)$(MANDIR)/podsock.1
 	@echo "Uninstall complete"
 
 completions: podsock.py
@@ -70,3 +76,7 @@ test:
 	@pytest test_podsock.py -v
 
 check: test
+
+clean:
+	@rm -rf __pycache__ .pytest_cache
+	@find . -name '*.pyc' -delete

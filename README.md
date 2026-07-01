@@ -161,6 +161,10 @@ sudo make install PREFIX=/usr/local
 make install PREFIX=/usr DESTDIR=/tmp/stage  # packaging
 ```
 
+### Manual
+
+The man page is installed to `$(PREFIX)/share/man/man1/podsock.1`. View it with `man podsock`.
+
 ### Uninstall
 
 ```bash

@@ -31,10 +31,13 @@ import sys
 import time
 
 
+__version__ = "0.1.0"
+
 PODSOCK_INIT = os.environ.get("PODSOCK_INIT", "1")
 PODSOCK_RTDIR = os.environ.get("PODSOCK_RTDIR", f"/run/user/{os.getuid()}")
 
 _BOOL_LONG_OPTS = frozenset(["--help", "--version", "--syslog"])
+_GLOBAL_SHORT_VAL_OPTS = frozenset("cH")
 _FLAG_DESCS = {
     "t": "Terminal interactivity (uses $TERM)",
     "T": "Terminal interactivity (forces xterm-256color)",
@@ -60,21 +63,18 @@ def die(msg):
 
 
 def show_help(subcommand=None):
-    """Display podsock and podman help for the given subcommand."""
-    print("Podsock - podman wrapper with +flags")
-    print()
-    print("Usage: podsock [+flags] <command> [args...]")
-    print()
+    """Display podman help followed by podsock-specific help.
 
-    if subcommand in _ALLOWED_FLAGS:
-        flags = list(_ALLOWED_FLAGS[subcommand])
-    elif subcommand in ("shell", "helm"):
-        flags = ["?"]
-    elif subcommand == "help":
+    Podman's help output is shown first so that podsock's own additions
+    (flags, examples, warnings) appear at the bottom of the terminal and
+    remain visible without scrolling.
+    """
+    # Special cases that don't delegate to podman
+    if subcommand == "help":
         print("Show help for a podsock command.")
         print("Usage: podsock help <command>")
         return
-    elif subcommand == "cleanup":
+    if subcommand == "cleanup":
         print("Clean up stale D-Bus proxies and .desktop files for deleted containers.")
         print("Usage: podsock cleanup")
         print()
@@ -82,14 +82,72 @@ def show_help(subcommand=None):
         print("Stopped containers have their proxy stopped. Fully removed (orphan) containers")
         print("have both their proxy directories and .desktop files cleaned up.")
         return
+
+    # Determine available flags
+    if subcommand in _ALLOWED_FLAGS:
+        flags = list(_ALLOWED_FLAGS[subcommand])
+    elif subcommand in ("shell", "helm"):
+        flags = ["?"]
     else:
         flags = ["?"] if subcommand else []
+
+    podman_cmd = {"shell": "exec", "helm": "start"}.get(subcommand, subcommand)
+    podman_bin = shutil.which("podman")
+
+    # Run podman help first — its output is long and will scroll off the top,
+    # leaving podsock's own help visible at the bottom of the terminal.
+    if subcommand:
+        print(f"--- Podman help for '{podman_cmd}' ---")
+        if podman_bin:
+            subprocess.run([podman_bin, podman_cmd, "--help"], check=False)
+        else:
+            print("Error: podman not found in PATH", file=sys.stderr)
+    else:
+        print("--- Podman help ---")
+        if podman_bin:
+            subprocess.run([podman_bin, "--help"], check=False)
+        else:
+            print("Error: podman not found in PATH", file=sys.stderr)
+
+    print()
+    print("--- Podsock ---")
+    print("Podsock - podman wrapper with +flags")
+    print()
+    print("Usage: podsock [+flags] <command> [args...]")
+    print()
 
     if subcommand:
         print(f"Available +flags for '{subcommand}':")
         for f in flags:
             print(f"  +{f}  {_FLAG_DESCS[f]}")
         print()
+    else:
+        print("Subcommands:")
+        print("  shell <container> [command]  Run a shell (or command) in a running container")
+        print("  helm <container>             Start a container interactively")
+        print("  cleanup                      Clean up stale D-Bus proxies and .desktop files")
+        print()
+        print("Available +flags (all commands):")
+        print("  +?  Dry run (print command without executing)")
+        print()
+
+    # Examples
+    print("Examples:")
+    if subcommand in ("run", "create"):
+        print("  podsock run +Twg --rm -it ubuntu bash    Terminal + Wayland + GPU")
+        print("  podsock run +p --rm -it myimage          Playback-only audio")
+        print("  podsock run +D --name=myapp myimage      Desktop portal access")
+        print("  podsock +? run +Tngd myimage             Dry run (print podman command)")
+    elif subcommand in ("shell", "helm"):
+        print(f"  podsock {subcommand} mycontainer")
+        print(f"  podsock +? {subcommand} mycontainer       Dry run")
+    else:
+        print("  podsock run +Twg --rm -it ubuntu bash    Terminal + Wayland + GPU")
+        print("  podsock shell mycontainer                Shell into running container")
+        print("  podsock helm mycontainer                 Start container interactively")
+        print("  podsock cleanup                          Clean up stale proxies")
+        print("  podsock +? run +Tngd myimage             Dry run (print podman command)")
+    print()
 
     if subcommand in ("run", "create"):
         print(
@@ -99,21 +157,9 @@ def show_help(subcommand=None):
         )
         print()
 
-    podman_cmd = {"shell": "exec", "helm": "start"}.get(subcommand, subcommand)
-
-    if subcommand:
-        print(f"--- Podman help for '{podman_cmd}' ---")
-        subprocess.run(["podman", podman_cmd, "--help"], check=False)
-    else:
-        print("Subcommands:")
-        print("  shell <container> [command]  Run a shell (or command) in a running container")
-        print("  helm <container>             Start a container interactively")
-        print("  cleanup                      Clean up stale D-Bus proxies and .desktop files")
-        print()
+    if not subcommand:
         print("Use 'podsock <command> --help' for command-specific help.")
-        print()
-        print("--- Podman help ---")
-        subprocess.run(["podman", "--help"], check=False)
+        print("Full documentation: man podsock")
 
 
 def print_bash_completion():
@@ -384,7 +430,10 @@ def _read_data_file(filename):
 
 
 def _ensure_pipewire_playback_configs():
-    """Write playback-only host-side configs if missing."""
+    """Write playback-only host-side configs if missing, after user consent.
+
+    Returns True if config files were written, False if they already existed.
+    """
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     pw_dir = os.path.join(xdg, "pipewire", "pipewire.conf.d")
     wp_dir = os.path.join(xdg, "wireplumber", "wireplumber.conf.d")
@@ -392,14 +441,41 @@ def _ensure_pipewire_playback_configs():
         (pw_dir, "99-podsock-playback.conf", "pipewire-playback.conf"),
         (wp_dir, "99-podsock-playback-only.conf", "wireplumber-playback-only.conf"),
     ]
+
+    pending = []
     for dir_path, dest_name, src_name in configs:
-        os.makedirs(dir_path, exist_ok=True)
         path = os.path.join(dir_path, dest_name)
         if not os.path.exists(path):
-            print(f"Installing {src_name} to {path}", file=sys.stderr)
-            contents = _read_data_file(src_name)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(contents)
+            pending.append((dir_path, path, src_name))
+
+    if not pending:
+        return False
+
+    print("\nWARNING: +p requires host-side PipeWire/WirePlumber configuration", file=sys.stderr)
+    print("         files that modify your system's audio daemon. This affects", file=sys.stderr)
+    print("         all PipeWire clients, not just this container.", file=sys.stderr)
+    print("\n  The following files will be created:", file=sys.stderr)
+    for _, path, src_name in pending:
+        print(f"    {path}", file=sys.stderr)
+    print("\n  After installation, you must restart PipeWire:", file=sys.stderr)
+    print("    systemctl --user restart pipewire wireplumber", file=sys.stderr)
+    print(file=sys.stderr)
+
+    try:
+        resp = input("Install these config files? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        resp = ""
+    if resp not in ("y", "yes"):
+        die("Aborted. No config files were written.")
+
+    for dir_path, path, src_name in pending:
+        os.makedirs(dir_path, exist_ok=True)
+        print(f"Installing {src_name} to {path}", file=sys.stderr)
+        contents = _read_data_file(src_name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(contents)
+
+    return True
 
 
 def _start_xdg_dbus_proxy(app_id, name, dryrun=False):
@@ -762,13 +838,22 @@ def _expand_flag(char):
             die("Error: XDG_RUNTIME_DIR not set")
         playback_sock = os.path.join(xdg, "pipewire-0-playback")
         if not os.path.exists(playback_sock) or not stat.S_ISSOCK(os.stat(playback_sock).st_mode):
-            _ensure_pipewire_playback_configs()
-            die(
-                "Error: PipeWire playback-only socket not found.\n"
-                "Host-side config files were installed. Restart PipeWire to activate:\n"
-                "  systemctl --user restart pipewire wireplumber\n"
-                "Then retry +p."
-            )
+            installed = _ensure_pipewire_playback_configs()
+            if installed:
+                die(
+                    "Error: PipeWire playback-only socket not found.\n"
+                    "Host-side config files were installed. Restart PipeWire to activate:\n"
+                    "  systemctl --user restart pipewire wireplumber\n"
+                    "Then retry +p."
+                )
+            else:
+                die(
+                    "Error: PipeWire playback-only socket not found.\n"
+                    "Host-side config files are already installed but the socket\n"
+                    "is not available. Ensure PipeWire is running:\n"
+                    "  systemctl --user restart pipewire wireplumber\n"
+                    "Then retry +p."
+                )
         return [
             f"--env=PIPEWIRE_REMOTE=pipewire-0-playback",
             f"--volume={playback_sock}:{PODSOCK_RTDIR}/pipewire-0-playback:ro",
@@ -879,6 +964,9 @@ def _find_subcommand(args):
             # Long option without '=': next arg is likely its value
             if arg.startswith("--") and "=" not in arg and arg not in _BOOL_LONG_OPTS:
                 skip_next = True
+            # Short option that takes a value: next arg is its value
+            elif len(arg) == 2 and arg[1] in _GLOBAL_SHORT_VAL_OPTS:
+                skip_next = True
             continue
         return arg, i
     return None, -1
@@ -889,7 +977,12 @@ def main():
     args = sys.argv[1:]
 
     if not args:
-        os.execvp("podman", ["podman"])
+        print("Podsock - podman wrapper with +flags")
+        print()
+        print("Usage: podsock [+flags] <command> [args...]")
+        print()
+        print("Run 'podsock --help' for full help, or 'man podsock' for the manual.")
+        sys.exit(0)
 
     if len(args) == 1 and args[0] == "--bash-completion":
         print_bash_completion()
@@ -911,6 +1004,7 @@ def main():
     # Scan args before -- and before the first positional after the subcommand.
     # Skip the subcommand itself and values of long/short options.
     help_found = False
+    version_found = False
     skip_next = False
     for i, arg in enumerate(args):
         if arg == "--":
@@ -929,10 +1023,21 @@ def main():
             if arg in ("-h", "--help"):
                 help_found = True
                 break
+            if arg == "--version":
+                version_found = True
+                break
             continue
         if subcommand is not None and i == subcommand_idx:
             continue
         break
+    if version_found:
+        podman_bin = shutil.which("podman")
+        if podman_bin:
+            subprocess.run([podman_bin, "--version"], check=False)
+        else:
+            print("Error: podman not found in PATH", file=sys.stderr)
+        print(f"podsock {__version__}")
+        sys.exit(0)
     if help_found:
         show_help(subcommand)
         sys.exit(0)
@@ -1071,7 +1176,6 @@ def main():
         container_idx = _find_first_positional(
             args, subcommand_idx + 1,
             frozenset(["--force", "--all", "--latest", "--volumes", "--depend"]),
-            frozenset("flv"),
         )
         if container_idx != -1:
             container_arg = args[container_idx]

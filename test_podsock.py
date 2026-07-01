@@ -47,11 +47,12 @@ _D = ["--cap-add=SYS_PTRACE,PERFMON", "--security-opt", "seccomp=unconfined"]
 _F = ["--device", "/dev/fuse", "--cap-add=SYS_ADMIN"]
 
 
-def _run(args, env=None):
+def _run(args, env=None, stdin=None):
     env = env or _ENV
     return subprocess.run(
         [sys.executable, PODSOCK] + args,
         capture_output=True, text=True, env=env, check=False,
+        input=stdin,
     )
 
 
@@ -154,7 +155,7 @@ _ERROR_CASES = [
     (["+?", "run", "myimage", "+extra"], ["not supported"]),
     (["+A", "shell", "mycontainer"], ["not supported"]),
     (["+D", "helm", "mycontainer"], ["not supported"]),
-    (["+p", "run", "myimage"], ["restart pipewire"]),
+    (["+p", "run", "myimage"], ["Aborted"]),
     (["+P", "run", "myimage"], ["No audio socket found"]),
 ]
 
@@ -166,14 +167,14 @@ _ERROR_CASES = [
     ids=[" ".join(c[0]) for c in _ERROR_CASES],
 )
 def test_error(args, expected_substrings):
-    result = _run(args)
+    stdin = "n\n" if "+p" in args else None
+    result = _run(args, stdin=stdin)
     try:
         assert result.returncode != 0
         combined = result.stdout + "\n" + result.stderr
         for s in expected_substrings:
             assert s in combined
     finally:
-        # Clean up auto-installed PipeWire configs from +p error test
         if "+p" in args:
             _cleanup_pipewire_configs()
 
@@ -198,6 +199,28 @@ def test_help(args, expected_substrings):
     combined = result.stdout + "\n" + result.stderr
     for s in expected_substrings:
         assert s in combined
+
+
+# ---- Version ----
+def test_version():
+    result = _run(["--version"])
+    assert result.returncode == 0
+    assert "podsock" in result.stdout.lower()
+
+
+def test_version_with_flags():
+    result = _run(["+?", "--version"])
+    assert result.returncode == 0
+    assert "podsock" in result.stdout.lower()
+
+
+# ---- No-args help ----
+def test_no_args_shows_help():
+    result = _run([])
+    assert result.returncode == 0
+    combined = result.stdout + "\n" + result.stderr
+    assert "Podsock" in combined
+    assert "Usage" in combined
 
 
 # ---- Audio forwarding ----
@@ -552,6 +575,51 @@ class TestPortalDocMount:
 
 # ---- Utility helpers ----
 class TestHelpers:
+    def test_find_subcommand_short_opt_with_value(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sub, idx = mod._find_subcommand(["-c", "myconn", "run", "myimage"])
+        assert sub == "run"
+        assert idx == 2
+
+    def test_find_subcommand_short_opt_with_equals(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sub, idx = mod._find_subcommand(["-c=myconn", "run", "myimage"])
+        assert sub == "run"
+        assert idx == 1
+
+    def test_find_subcommand_long_opt_with_value(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sub, idx = mod._find_subcommand(["--connection", "myconn", "run", "myimage"])
+        assert sub == "run"
+        assert idx == 2
+
+    def test_find_subcommand_bool_short_opt(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sub, idx = mod._find_subcommand(["-r", "run", "myimage"])
+        assert sub == "run"
+        assert idx == 1
+
+    def test_find_subcommand_plus_flags(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sub, idx = mod._find_subcommand(["+T", "+d", "run", "myimage"])
+        assert sub == "run"
+        assert idx == 2
+
     def test_extract_container_name_equals(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("podsock", PODSOCK)

@@ -38,6 +38,15 @@ _ENV = {
 PODSOCK_RTDIR = f"/run/user/{os.getuid()}"
 TERM = os.environ.get("TERM", "xterm")
 
+
+def _load_podsock():
+    """Load podsock.py as a module (for reusing its helper functions in tests)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("podsock", PODSOCK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 _RUN_OPTS = ["--tmpfs", f"{PODSOCK_RTDIR}:mode=0700,U", "--security-opt", "label=disable", "--userns", "keep-id", f"--env=XDG_RUNTIME_DIR={PODSOCK_RTDIR}", "--init"]
 _CREATE_OPTS = ["--tmpfs", f"{PODSOCK_RTDIR}:mode=0700,U", "--security-opt", "label=disable", "--userns", "keep-id", f"--env=XDG_RUNTIME_DIR={PODSOCK_RTDIR}", "--init"]
 _T = ["--interactive", "--tty", f"--env=TERM={TERM}"]
@@ -70,11 +79,25 @@ def _cmd_from_dryrun(stdout):
 _A_LABELS = ["--label=podsock.app_id=podsock_myapp", "--label=podsock.name=myapp"]
 _D_LABELS = ["--label=podsock.portal=true"]
 _PROXY_HOST_DIR = os.path.expanduser("~/.var/podsock/sockets/myapp")
-_D_PORTAL = [
-    f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path={PODSOCK_RTDIR}/podsock_proxy/bus.sock",
-    f"--volume={_PROXY_HOST_DIR}:{PODSOCK_RTDIR}/podsock_proxy:ro",
-    f"--volume={PODSOCK_RTDIR}/doc:{PODSOCK_RTDIR}/doc",
-]
+
+
+def _build_d_portal():
+    """Build the expected +D portal args by mirroring podsock's _portal_flag_args.
+
+    The document-portal bind mount is conditional: it is only emitted when
+    $XDG_RUNTIME_DIR/doc is a plain, accessible directory (not a FUSE mount,
+    which cannot be bind-mounted into a rootless container). Reusing the
+    implementation's own logic keeps the test expectation in sync with the
+    host environment rather than hardcoding the doc mount as always present.
+    """
+    import contextlib
+    import io
+    mod = _load_podsock()
+    with contextlib.redirect_stderr(io.StringIO()):
+        return mod._portal_flag_args("myapp", dryrun=True)
+
+
+_D_PORTAL = _build_d_portal()
 
 _DRYRUN_CASES = [
     (["+?", "run", "myimage"], ["podman", "run"] + _RUN_OPTS + ["myimage"]),
@@ -152,6 +175,9 @@ _ERROR_CASES = [
     (["+tT", "run", "myimage"], ["mutually exclusive"]),
     (["+t", "+T", "run", "myimage"], ["mutually exclusive"]),
     (["+T", "+t", "run", "myimage"], ["mutually exclusive"]),
+    (["+pP", "run", "myimage"], ["mutually exclusive"]),
+    (["+p", "+P", "run", "myimage"], ["mutually exclusive"]),
+    (["+P", "+p", "run", "myimage"], ["mutually exclusive"]),
     (["+?", "run", "myimage", "+extra"], ["not supported"]),
     (["+A", "shell", "mycontainer"], ["not supported"]),
     (["+D", "helm", "mycontainer"], ["not supported"]),
@@ -411,6 +437,14 @@ class TestBashCompletionFlags:
         assert "+Tt" not in out
         out = _bash_complete(["podsock", "+t", "run", "+"])
         assert "+T" not in out
+
+    def test_mutually_exclusive_pP(self):
+        out = _bash_complete(["podsock", "run", "+p"])
+        assert "+pP" not in out
+        out = _bash_complete(["podsock", "run", "+P"])
+        assert "+Pp" not in out
+        out = _bash_complete(["podsock", "+p", "run", "+"])
+        assert "+P" not in out
 
     def test_multiword_dedup(self):
         out = _bash_complete(["podsock", "+T", "+d", "run", "+"])

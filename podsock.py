@@ -198,6 +198,9 @@ def print_bash_completion():
             # +t and +T are mutually exclusive (different terminal modes)
             [[ "$c" == "t" && "$used" == *T* ]] && continue
             [[ "$c" == "T" && "$used" == *t* ]] && continue
+            # +p and +P are mutually exclusive (playback-only vs full audio)
+            [[ "$c" == "p" && "$used" == *P* ]] && continue
+            [[ "$c" == "P" && "$used" == *p* ]] && continue
             remaining="${remaining}${c}"
         done
 
@@ -1065,6 +1068,8 @@ def main():
             seen.add(char)
     if "t" in seen and "T" in seen:
         die("Error: +t and +T are mutually exclusive")
+    if "p" in seen and "P" in seen:
+        die("Error: +p and +P are mutually exclusive")
 
     has_A = "A" in seen
     has_D = "D" in seen

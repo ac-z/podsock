@@ -29,6 +29,7 @@ podsock helm mycontainer
 | `+?` | Dry run (print the podman command without executing) | all |
 
 Flags can be chained: `+Tdn` gives you terminal, debug, and network.
+`+t`/`+T` and `+p`/`+P` are mutually exclusive pairs.
 
 ## Subcommands
 
